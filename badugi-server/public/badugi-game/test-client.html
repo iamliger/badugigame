@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+    <html lang="ko">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Socket.IO 테스트 클라이언트</title>
+        <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+        <style>
+            body { font-family: Arial, sans-serif; margin: 20px; }
+            #messages { list-style-type: none; padding: 0; }
+            #messages li { padding: 5px 10px; border-bottom: 1px solid #eee; }
+            #form { background: #f9f9f9; padding: 10px; border-top: 1px solid #ddd; position: fixed; bottom: 0; left: 0; right: 0; }
+            #input { border: 1px solid #ccc; padding: 8px; width: calc(100% - 100px); }
+            #send { padding: 8px 15px; background: #007bff; color: white; border: none; cursor: pointer; }
+        </style>
+    </head>
+    <body>
+        <h1>Socket.IO 테스트 클라이언트</h1>
+        <ul id="messages"></ul>
+        <form id="form" action="">
+            <input id="input" type="text" autocomplete="off" placeholder="메시지를 입력하세요" aria-describedby="inputHelp" />
+            <button id="send" type="button">전송</button>
+        </form>
+
+        <script>
+            // Node.js 게임 서버의 주소로 연결
+            const socket = io('http://localhost:3000'); // 서버가 실행 중인 주소와 포트
+
+            const form = document.getElementById('form');
+            const input = document.getElementById('input');
+            const messages = document.getElementById('messages');
+
+            // 서버로부터 'message' 이벤트를 받으면 메시지를 화면에 추가
+            socket.on('message', (msg) => {
+                const item = document.createElement('li');
+                item.textContent = msg;
+                messages.appendChild(item);
+                window.scrollTo(0, document.body.scrollHeight);
+            });
+
+            // 서버로부터 'roomMessage' 이벤트를 받으면 메시지를 화면에 추가 (나중에 사용)
+            socket.on('roomMessage', (msg) => {
+                const item = document.createElement('li');
+                item.style.color = 'blue';
+                item.textContent = `[ROOM] ${msg}`;
+                messages.appendChild(item);
+                window.scrollTo(0, document.body.scrollHeight);
+            });
+
+            // 폼 제출 시 메시지 전송
+            form.addEventListener('submit', (e) => {
+                e.preventDefault();
+                if (input.value) {
+                    socket.emit('message', input.value); // 서버로 'message' 이벤트와 함께 데이터 전송
+                    input.value = '';
+                }
+            });
+
+            // 방 입장 테스트 (옵션)
+            // setTimeout(() => {
+            //     socket.emit('joinRoom', 'badugi-room-1');
+            // }, 2000);
+        </script>
+    </body>
+    </html>

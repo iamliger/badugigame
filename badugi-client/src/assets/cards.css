@@ -1,0 +1,130 @@
+/* badugi-client/src/assets/cards.css */
+
+/* 카드 한 장의 기본 컨테이너 스타일 */
+.card-face {
+  width: 225px;
+  /* 실제 카드 이미지 한 장의 가로 폭 (2925 / 13) */
+  height: 315px;
+  /* 실제 카드 이미지 한 장의 세로 높이 (1260 / 4) */
+  background-image: url('/cards/cards_sprite.png');
+  background-repeat: no-repeat;
+  /* --- START MODIFICATION --- */
+  /* 스프라이트 시트의 원본 크기를 명시하거나, auto로 유지하면서 position 조정 */
+  /* background-size: 2925px 1260px; */
+  /* 원본 스프라이트 크기 (정확한 오프셋 계산에 필수) */
+  background-size: auto;
+  /* auto로 두면 background-position에 따라 원본 크기에서 잘려 보임 */
+  /* background-position은 아래 suit, rank 클래스에서 설정됩니다. */
+  /* --- END MODIFICATION --- */
+  border: 1px solid #ccc;
+  border-radius: 5px;
+  box-shadow: 2px 2px 5px rgba(0, 0, 0, 0.2);
+  display: inline-block;
+  flex-shrink: 0;
+  margin: 2px;
+  overflow: hidden;
+  /* 카드를 자르기 위해 추가 */
+}
+
+/* 카드 뒷면 이미지 스타일 (별도 이미지) */
+.card-image-back {
+  width: 225px;
+  height: 315px;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  object-fit: cover;
+}
+
+
+/* --- 무늬별 세로 위치 (Y 오프셋) --- */
+/* 제공된 이미지 순서: 하트(0), 스페이드(1), 다이아몬드(2), 클로버(3) */
+/* 각 값은 "측정된 카드 한 장의 높이"의 음수 배수 */
+.suit-h {
+  background-position-y: 0px;
+}
+
+/* 하트 (0 * 315px) */
+.suit-s {
+  background-position-y: -315px;
+}
+
+/* 스페이드 (-1 * 315px) */
+.suit-d {
+  background-position-y: -630px;
+}
+
+/* 다이아몬드 (-2 * 315px) */
+.suit-c {
+  background-position-y: -945px;
+}
+
+/* 클로버 (-3 * 315px) */
+
+/* --- 랭크별 가로 위치 (X 오프셋) --- */
+/* 이미지 순서: A(0), 2(1), 3(2), ..., T(9), J(10), Q(11), K(12) */
+/* 각 값은 "측정된 카드 한 장의 폭"의 음수 배수 */
+.rank-a {
+  background-position-x: 0px;
+}
+
+/* A (0 * 225px) */
+.rank-2 {
+  background-position-x: -225px;
+}
+
+/* 2 (-1 * 225px) */
+.rank-3 {
+  background-position-x: -450px;
+}
+
+/* 3 (-2 * 225px) */
+.rank-4 {
+  background-position-x: -675px;
+}
+
+/* 4 (-3 * 225px) */
+.rank-5 {
+  background-position-x: -900px;
+}
+
+/* 5 (-4 * 225px) */
+.rank-6 {
+  background-position-x: -1125px;
+}
+
+/* 6 (-5 * 225px) */
+.rank-7 {
+  background-position-x: -1350px;
+}
+
+/* 7 (-6 * 225px) */
+.rank-8 {
+  background-position-x: -1575px;
+}
+
+/* 8 (-7 * 225px) */
+.rank-9 {
+  background-position-x: -1800px;
+}
+
+/* 9 (-8 * 225px) */
+.rank-t {
+  background-position-x: -2025px;
+}
+
+/* T (10) (-9 * 225px) */
+.rank-j {
+  background-position-x: -2250px;
+}
+
+/* J (-10 * 225px) */
+.rank-q {
+  background-position-x: -2475px;
+}
+
+/* Q (-11 * 225px) */
+.rank-k {
+  background-position-x: -2700px;
+}
+
+/* K (-12 * 225px) */

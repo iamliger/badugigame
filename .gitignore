@@ -1,0 +1,38 @@
+# BadugiGame/.gitignore
+
+# --- 공통적으로 무시할 파일/폴더 ---
+.DS_Store
+.env
+.env.*.local
+npm-debug.log
+yarn-error.log
+.idea/
+.vscode/
+/.history/ # VS Code History
+*.log
+*.sqlite
+/tmp/
+
+# --- badugi-server (Laravel) 관련 ---
+/badugi-server/bootstrap/cache/*.php
+/badugi-server/node_modules
+/badugi-server/public/hot
+/badugi-server/public/storage
+/badugi-server/storage/*.key
+/badugi-server/vendor
+/badugi-server/.env # Laravel .env 파일은 이미 상단에 공통으로 포함
+/badugi-server/.env.backup
+/badugi-server/.phpunit.result.cache
+/badugi-server/Homestead.json
+/badugi-server/Homestead.yaml
+
+# --- badugi-game-server (Node.js) 관련 ---
+/badugi-game-server/node_modules
+/badugi-game-server/dist
+/badugi-game-server/.env # Node.js .env 파일도 이미 상단에 공통으로 포함
+
+# --- badugi-client (Vue.js) 관련 ---
+/badugi-client/node_modules
+/badugi-client/dist # Vue 프로젝트 빌드 결과물
+/badugi-client/.env # Vue .env 파일도 이미 상단에 공통으로 포함
+/badugi-client/.env.*.local # Vite 환경변수

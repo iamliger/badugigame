@@ -12,63 +12,68 @@ class GameService {
     constructor(io, rooms) {
         this.io = io;
         this.rooms = rooms;
+
+        this.bettingRoundNames = ['아침', '점심', '저녁', '최종']; // 4개의 베팅 라운드 이름
+        this.maxBettingRounds = this.bettingRoundNames.length; // 총 베팅 라운드 수 (0, 1, 2, 3)
+        this.maxExchangeOpportunities = this.maxBettingRounds - 1; // 총 카드 교환 기회 수 (3번)
+
         this.decks = {};
 
-        this.roundNames = ['아침', '점심', '저녁']; // 0, 1, 2
-        // this.maxExchangeRounds = 3; // 각 라운드마다 교환 기회 한 번 (최대 3번의 교환 라운드)
-
+        // ✨ 메서드를 constructor에서 바인딩하여 'this' 컨텍스트를 유지
         this.startGame = this.startGame.bind(this);
         this.drawCard = this.drawCard.bind(this);
         this.advanceTurn = this.advanceTurn.bind(this);
-        // this.startNextRound = this.startNextRound.bind(this); // ✨ 더 이상 직접 호출하지 않음
         this.handleBettingAction = this.handleBettingAction.bind(this);
         this.handleCardExchange = this.handleCardExchange.bind(this);
         this.showdown = this.showdown.bind(this);
+        this.handlePhaseTransitionAfterBetting = this.handlePhaseTransitionAfterBetting.bind(this);
+        this.handlePhaseTransitionAfterExchange = this.handlePhaseTransitionAfterExchange.bind(this);
+        this.cleanupRoomAfterGame = this.cleanupRoomAfterGame.bind(this);
     }
 
     startGame(roomId) {
         const room = this.rooms[roomId];
-
         if (!room) { errorDebug(`[GameService] 게임 시작 실패: 방 ${roomId}를 찾을 수 없습니다.`); return false; }
         if (room.status !== 'waiting') { warnDebug(`[GameService] 게임 시작 실패: 방 ${roomId}는 이미 ${room.status} 상태입니다.`); return false; }
         if (room.players.length < 2) { warnDebug(`[GameService] 게임 시작 실패: 방 ${roomId}에 최소 2명 이상의 플레이어가 필요합니다.`); return false; }
 
         room.status = 'playing';
-        room.maxRounds = this.roundNames.length; // 아침, 점심, 저녁 (3 라운드: 0, 1, 2)
-        room.currentRound = 0; // 0: 아침, 1: 점심, 2: 저녁
-        room.gameRoundName = this.roundNames[room.currentRound];
+        room.currentBettingRoundIndex = 0; // 현재 베팅 라운드 인덱스 (0: 아침)
+        room.currentExchangeOpportunityIndex = -1; // 초기에는 교환 기회 없음
+        room.gameRoundName = this.bettingRoundNames[room.currentBettingRoundIndex]; // 현재 베팅 라운드 이름
         room.pot = 0;
         room.currentBet = room.betAmount; // 초기 베팅액은 방 설정 베팅액 (안테로 간주)
-        room.activePlayers = room.players.filter(p => !p.leaveReserved).map(p => p.id); // 게임 시작 시점의 활성 플레이어
+        room.activePlayers = room.players.filter(p => !p.leaveReserved).map(p => p.id);
         room.lastBettingPlayer = null;
         room.hands = {};
         room.discardPiles = {};
         room.currentTurnPlayerId = null;
         room.currentPhase = 'betting'; // 게임 시작 시 초기 페이즈는 'betting'
 
-        // 칩 부족 플레이어 확인 및 처리
-        const playersWithInsufficientChips = room.players.filter(player => player.chips < room.betAmount); // 안테 금액 확인
+        // 칩 부족 플레이어 확인 및 처리 (최초 안테 지불 전)
+        const playersWithInsufficientChips = room.players.filter(player => player.chips < room.betAmount);
         if (playersWithInsufficientChips.length > 0) {
             errorDebug(`[GameService] 방 ${roomId} 칩 부족으로 게임 시작 불가. 다음 플레이어들: ${playersWithInsufficientChips.map(p => p.name).join(', ')} (필요 칩: ${room.betAmount})`);
-            room.status = 'waiting'; // 게임 시작 실패 처리
+            room.status = 'waiting';
             this.io.to(`room-${roomId}`).emit('gameError', { message: '일부 플레이어의 칩이 부족하여 게임을 시작할 수 없습니다.' });
             return false;
         }
 
         room.players.forEach(player => {
-            player.chips -= room.betAmount;     // 칩 차감
+            player.chips -= room.betAmount;     // 칩 차감 (최초 안테)
             room.pot += room.betAmount;         // 팟에 추가
             player.currentRoundBet = room.betAmount; // 현재 라운드 베팅액에 기본금 포함
             player.folded = false;
             player.status = 'playing';
             player.bestHand = null;
-            player.canExchange = true;
+            player.canExchange = false; // 아침 라운드 교환 불가
             player.hasActedInBettingRound = false;
-            player.leaveReserved = false; // 게임 시작 시 퇴장 예약 초기화
+            player.leaveReserved = false;
         });
         logDebug(`[GameService] 방 ${roomId} 모든 플레이어 기본금 ${room.betAmount} 칩 지불 완료. 현재 팟: ${room.pot}`);
 
-        // 방장부터 첫 턴 시작
+        // ✨ 딜러, 스몰 블라인드, 빅 블라인드 설정 (블라인드 베팅은 없지만 역할 표시는 필요)
+        // 방장부터 시작하고, 딜러는 방장의 오른쪽.
         const creatorPlayerIndex = room.players.findIndex(p => p.id === room.creatorId);
         if (creatorPlayerIndex === -1) {
             errorDebug(`[GameService] 방 ${roomId}에서 방장(ID: ${room.creatorId})을 찾을 수 없습니다.`);
@@ -76,51 +81,55 @@ class GameService {
             return false;
         }
 
+        // 딜러 위치 설정 (랜덤 또는 이전 라운드 딜러의 다음)
+        // 현재는 첫 게임이므로 방장 다음을 딜러로 시작 (방장의 오른쪽)
+        room.dealerIndex = (creatorPlayerIndex - 1 + room.players.length) % room.players.length;
+        room.dealerId = room.players[room.dealerIndex].id;
+
+        // 스몰 블라인드 (딜러 왼쪽)
+        const smallBlindIndex = (room.dealerIndex + 1) % room.players.length;
+        room.smallBlindId = room.players[smallBlindIndex].id;
+
+        // 빅 블라인드 (스몰 블라인드 왼쪽)
+        const bigBlindIndex = (smallBlindIndex + 1) % room.players.length;
+        room.bigBlindId = room.players[bigBlindIndex].id;
+
+        // 첫 턴은 방장부터 시작
         room.turnIndex = creatorPlayerIndex;
         room.currentTurnPlayerId = room.creatorId;
-        // 딜러는 첫 턴 플레이어의 오른쪽에 위치 (포커/바둑이 룰에 따라)
-        // 예를 들어, 딜러 좌측부터 액션 시작 시, 방장이 첫 액션이면 딜러는 방장 오른쪽
-        room.dealerIndex = (creatorPlayerIndex - 1 + room.players.length) % room.players.length;
 
-        logDebug(`[GameService] 방 ${roomId} 게임 시작. 첫 턴: User ${room.players[room.turnIndex].name} (ID: ${room.currentTurnPlayerId}), 딜러: ${room.players[room.dealerIndex].name}`);
+        logDebug(`[GameService] 방 ${roomId} 게임 시작. 딜러: ${room.players[room.dealerIndex].name}, SB: ${room.players[smallBlindIndex].name}, BB: ${room.players[bigBlindIndex].name}. 첫 턴: User ${room.players[room.turnIndex].name} (ID: ${room.currentTurnPlayerId})`);
 
+        // 덱 생성 및 패 분배
         const newDeck = shuffleDeck(createDeck());
         this.decks[roomId] = newDeck;
-        logDebug(`[GameService] 방 ${roomId} 덱 생성 및 셔플 완료. 덱 크기: ${newDeck.length}`);
-
-        // 초기 패 분배
         room.players.forEach(player => {
-            const hand = [];
-            for (let i = 0; i < 4; i++) {
-                hand.push(this.drawCard(roomId));
-            }
+            const hand = []; for (let i = 0; i < 4; i++) hand.push(this.drawCard(roomId));
             room.hands[player.id] = hand;
-            logDebug(`[GameService] User ${player.name} (ID: ${player.id})에게 초기 패 분배 완료: ${hand.map(c => `${c.suit}${c.rank}`).join(', ')}`);
-        });
-
-        // 초기 패 족보 평가
-        room.players.forEach(player => {
             player.bestHand = evaluateBadugiHand(room.hands[player.id]);
-            logDebug(`[GameService] User ${player.name} (ID: ${player.id}) 초기 패 족보: ${player.bestHand.rank}, 값: ${player.bestHand.value}`);
+            logDebug(`[GameService] User ${player.name} (ID: ${player.id}) 초기 패 분배 완료: ${hand.map(c => `${c.suit}${c.rank}`).join(', ')}, 족보: ${player.bestHand.rank}`);
         });
 
-        // 게임 시작 및 턴 정보 클라이언트에 전송
+        // 클라이언트에게 게임 시작 정보 전송
         room.players.forEach(player => {
-            // 다른 플레이어에게는 패 정보 숨김
-            const roomForClient = { ...room, hands: {} };
-            // 자신에게는 자신의 패 정보 포함
+            const roomForClient = { ...room, hands: {} }; // hands는 개인 정보이므로 전송하지 않음
             this.io.to(player.socketId).emit('gameStarted', {
                 room: roomForClient,
                 myHand: room.hands[player.id],
                 currentPlayerId: room.currentTurnPlayerId,
                 gameRoundName: room.gameRoundName,
-                currentRound: room.currentRound,
+                currentBettingRoundIndex: room.currentBettingRoundIndex,
+                currentExchangeOpportunityIndex: room.currentExchangeOpportunityIndex,
                 currentPhase: room.currentPhase,
+                maxBettingRounds: this.maxBettingRounds,
+                maxExchangeOpportunities: this.maxExchangeOpportunities,
+                dealerId: room.dealerId, // ✨ 역할 ID 전송
+                smallBlindId: room.smallBlindId, // ✨ 역할 ID 전송
+                bigBlindId: room.bigBlindId // ✨ 역할 ID 전송
             });
         });
 
         this.io.to(`room-${roomId}`).emit('turnChanged', { currentPlayerId: room.currentTurnPlayerId, timeLeft: 30 });
-
         return true;
     }
 
@@ -139,20 +148,15 @@ class GameService {
     }
 
     /**
-     * ➡️ 다음 턴 플레이어를 설정하고 클라이언트에게 알립니다.
-     * 라운드 종료 조건도 확인합니다.
+     * ➡️ 턴을 진행하거나 페이즈/라운드를 전환합니다.
      * @param {number} roomId - 턴을 진행할 방의 ID
-     * @returns {boolean} 턴 진행 성공 여부 (true: 다음 턴 플레이어 있음, false: 라운드 종료)
+     * @returns {boolean} 성공 여부 (true: 턴/페이즈 전환 성공, false: 정지 또는 오류)
      */
     advanceTurn(roomId) {
         const room = this.rooms[roomId];
-        if (!room) {
-            errorDebug(`[GameService] advanceTurn 실패: 방 ${roomId}를 찾을 수 없습니다.`);
-            return false;
-        }
+        if (!room) { errorDebug(`[GameService] advanceTurn 실패: 방 ${roomId}를 찾을 수 없습니다.`); return false; }
 
-        let nextTurnIndex = room.turnIndex;
-        const originalTurnPlayerId = room.currentTurnPlayerId;
+        let currentTurnIndex = room.turnIndex;
         const activePlayersInRound = room.players.filter(p => !p.folded && !p.leaveReserved);
 
         // 1. 활성 플레이어가 1명 이하이면 게임 즉시 종료 (강제 승리)
@@ -162,130 +166,188 @@ class GameService {
             return false;
         }
 
+        // --- Phase Completion Check ---
         let phaseCompleted = false;
-
-        // 2. 현재 페이즈 종료 조건 확인
         if (room.currentPhase === 'betting') {
-            const allPlayersCalledOrChecked = activePlayersInRound.every(p => p.currentRoundBet === room.currentBet || p.folded);
-            const turnReturnedToLastBetter = room.lastBettingPlayer === null || originalTurnPlayerId === room.lastBettingPlayer;
+            const allPlayersCalledOrChecked = activePlayersInRound.every(p => p.currentRoundBet === room.currentBet);
+            const allPlayersActedOnce = activePlayersInRound.every(p => p.hasActedInBettingRound); // '첵'도 액션으로 간주
 
-            if (allPlayersCalledOrChecked && turnReturnedToLastBetter) {
-                phaseCompleted = true;
-                logDebug(`[GameService] 방 ${roomId} 베팅 페이즈 완료.`);
+            // 베팅 라운드 완료 조건:
+            // 1. 모든 활성 플레이어가 현재 베팅액에 콜하거나 체크했을 때
+            // 2. 그리고 (누군가 베팅/레이즈를 했다면 마지막 베팅 플레이어에게 턴이 돌아왔을 때 OR 아무도 레이즈하지 않고 모두 '첵'을 했을 때)
+
+            // `currentBet`이 `room.betAmount` (최초 안테) 보다 크다면 누군가 '삥' 또는 '레이즈'를 한 경우
+            if (room.currentBet > room.betAmount) {
+                if (allPlayersCalledOrChecked && room.currentTurnPlayerId === room.lastBettingPlayer && room.lastBettingPlayer !== null) {
+                    phaseCompleted = true;
+                }
+            } else { // `currentBet`이 `room.betAmount`와 같거나 0인 경우 (최초 안테만 냈거나, 모두 체크만 한 경우)
+                if (allPlayersCalledOrChecked && allPlayersActedOnce) {
+                    phaseCompleted = true;
+                }
+            }
+
+            if (phaseCompleted) {
+                logDebug(`[GameService] 방 ${roomId} 베팅 페이즈 완료 (베팅 라운드 ${room.currentBettingRoundIndex}).`);
+                return this.handlePhaseTransitionAfterBetting(roomId);
             }
         } else if (room.currentPhase === 'exchange') {
             const allPlayersExchangedOrStayed = activePlayersInRound.every(p => !p.canExchange);
             if (allPlayersExchangedOrStayed) {
                 phaseCompleted = true;
-                logDebug(`[GameService] 방 ${roomId} 교환 페이즈 완료.`);
+            }
+
+            if (phaseCompleted) {
+                logDebug(`[GameService] 방 ${roomId} 교환 페이즈 완료 (기회 ${room.currentExchangeOpportunityIndex}).`);
+                return this.handlePhaseTransitionAfterExchange(roomId);
             }
         }
+        // --- End Phase Completion Check ---
 
-        if (phaseCompleted) {
-            if (room.currentPhase === 'betting') {
-                // 현재 베팅 페이즈 완료 -> 다음 단계 결정
-                logDebug(`[GameService] 방 ${roomId} 현재 라운드 ${room.currentRound}의 베팅 페이즈 종료.`);
+        // --- Advance Turn (if phase not completed) ---
+        let nextTurnPlayerFound = false;
+        let loopCount = 0;
+        const numPlayers = room.players.length;
+        const initialTurnPlayerId = room.currentTurnPlayerId;
 
-                // 모든 플레이어가 안테를 다시 내도록 처리 (새 라운드 시작 시)
-                activePlayersInRound.forEach(player => {
-                    if (player.chips < room.betAmount) { // 칩 부족 시 처리 (게임 종료 또는 강제 퇴장)
-                        warnDebug(`[GameService] User ${player.name} (ID: ${player.id}) 다음 라운드 안테 부족. 게임 종료 또는 퇴장 처리 필요.`);
-                        player.folded = true; // 임시로 폴드 처리하여 게임 종료 유도
-                        player.status = 'folded';
-                    } else {
-                        player.chips -= room.betAmount; // 새 라운드 안테 지불
-                        room.pot += room.betAmount;     // 팟에 추가
-                        player.currentRoundBet = room.betAmount; // 현재 라운드 베팅액에 안테 포함
-                    }
-                });
-                room.currentBet = room.betAmount; // 다음 페이즈/라운드 시작 시 기준 베팅액은 안테
-                room.lastBettingPlayer = null; // 마지막 베팅 플레이어 리셋
-                room.players.forEach(p => p.hasActedInBettingRound = false); // 액션 여부 리셋
-
-                if (room.currentRound < room.maxRounds - 1) { // 아직 카드 교환 기회가 남은 라운드 (아침(0), 점심(1))
-                    room.currentRound++; // 다음 메이저 라운드로 전환 (예: 아침(0) -> 점심(1))
-                    room.gameRoundName = this.roundNames[room.currentRound]; // '점심' 또는 '저녁'
-                    room.currentPhase = 'exchange'; // 다음 라운드는 교환 페이즈로 시작
-
-                    room.players.forEach(p => p.canExchange = true); // 모든 플레이어 교환 기회 부여
-
-                    logDebug(`[GameService] 방 ${roomId} 다음 라운드 ${room.gameRoundName}의 교환 페이즈 시작.`);
-                    this.io.to(`room-${roomId}`).emit('roundStarted', { // 'roundStarted' 이벤트로 새로운 라운드 정보 전달
-                        currentRound: room.currentRound,
-                        gameRoundName: room.gameRoundName,
-                        canExchangeCards: true, // 점심/저녁 라운드는 카드 교환 가능
-                        currentPhase: room.currentPhase,
-                        pot: room.pot, // 업데이트된 팟 정보
-                        currentBet: room.currentBet // 업데이트된 currentBet 정보
-                    });
-
-                    // 턴 순서는 다시 딜러 다음 플레이어부터
-                    room.turnIndex = (room.dealerIndex + 1) % room.players.length;
-                    room.currentTurnPlayerId = room.players[room.turnIndex].id;
-                    this.io.to(`room-${roomId}`).emit('turnChanged', { currentPlayerId: room.currentTurnPlayerId, timeLeft: 30, message: '카드 교환 차례입니다!' });
-                    this.io.to(`room-${roomId}`).emit('roomUpdated', room);
-                    return true; // 턴 진행은 계속해야 함 (교환 페이즈의 첫 턴으로)
-
-                } else { // 최종 베팅 라운드 (저녁 라운드)의 베팅 페이즈 완료
-                    logDebug(`[GameService] 방 ${roomId} 최종 베팅 라운드 (${room.gameRoundName}) 완료. 쇼다운으로 이동.`);
-                    this.showdown(roomId, false);
-                    return false; // 게임 종료
-                }
-            } else if (room.currentPhase === 'exchange') {
-                // 교환 페이즈 완료 -> 현재 라운드의 베팅 페이즈로 전환
-                logDebug(`[GameService] 방 ${roomId} 현재 라운드 ${room.currentRound}의 교환 페이즈 종료.`);
-
-                room.currentPhase = 'betting'; // 다시 베팅 페이즈로
-                room.currentBet = room.betAmount; // 베팅 기준 금액 초기화 (안테)
-                room.players.forEach(p => p.currentRoundBet = room.betAmount); // 안테 지불 금액으로 초기화
-                room.lastBettingPlayer = null; // 마지막 베팅 플레이어 리셋
-                room.players.forEach(p => p.hasActedInBettingRound = false); // 액션 여부 리셋
-
-                logDebug(`[GameService] 방 ${roomId} ${room.gameRoundName} 라운드의 베팅 페이즈 재시작.`);
-                this.io.to(`room-${roomId}`).emit('phaseChanged', { // 'phaseChanged' 이벤트로 페이즈 변경 알림
-                    currentPhase: room.currentPhase,
-                    message: `${room.gameRoundName} 라운드 베팅 시작!`,
-                    pot: room.pot, // 업데이트된 팟 정보
-                    currentBet: room.currentBet // 업데이트된 currentBet 정보
-                });
-
-                // 턴 순서는 다시 딜러 다음 플레이어부터
-                room.turnIndex = (room.dealerIndex + 1) % room.players.length;
-                room.currentTurnPlayerId = room.players[room.turnIndex].id;
-                this.io.to(`room-${roomId}`).emit('turnChanged', { currentPlayerId: room.currentTurnPlayerId, timeLeft: 30 });
-                this.io.to(`room-${roomId}`).emit('roomUpdated', room);
-                return true; // 턴 진행 계속
-            }
-        }
-
-        // 3. 페이즈가 끝나지 않았다면 다음 플레이어 찾기
+        // 턴 진행 루프 (모두가 폴드/교환 완료했거나 다음 액션 플레이어를 찾을 때까지)
         do {
-            nextTurnIndex = (nextTurnIndex + 1) % room.players.length;
-            const nextPlayer = room.players[nextTurnIndex];
+            currentTurnIndex = (currentTurnIndex + 1) % numPlayers;
+            const nextPlayer = room.players[currentTurnIndex];
 
-            // 활성 플레이어이고, 폴드하지 않았으며, 퇴장 예약도 하지 않은 플레이어 찾기
-            if (!nextPlayer.folded && !nextPlayer.leaveReserved) {
-                room.turnIndex = nextTurnIndex;
-                room.currentTurnPlayerId = nextPlayer.id;
-                logDebug(`[GameService] 방 ${roomId} 다음 턴: User ${nextPlayer.name} (ID: ${nextPlayer.id})`);
-                this.io.to(`room-${roomId}`).emit('turnChanged', { currentPlayerId: room.currentTurnPlayerId, timeLeft: 30 });
-                this.io.to(`room-${roomId}`).emit('roomUpdated', room);
-                return true; // 다음 턴 플레이어 찾음
-            }
-
-            // 모든 플레이어를 한 바퀴 돌았는데도 다음 플레이어를 찾지 못했다면 (모두 폴드/퇴장 예약 등)
-            if (nextPlayer.id === originalTurnPlayerId) {
-                warnDebug(`[GameService] 방 ${roomId} 다음 턴 플레이어를 찾을 수 없습니다. (모두 폴드/퇴장 예약?)`);
-                this.showdown(roomId, true); // 강제 승리 처리
+            // 턴이 한 바퀴 돌아 현재 플레이어에게 다시 왔는데, 아직 다음 턴 플레이어를 찾지 못했다면 정지
+            if (nextPlayer.id === initialTurnPlayerId && loopCount > 0) {
+                warnDebug(`[GameService] 방 ${roomId} 턴 진행 중 다음 액션 플레이어를 찾지 못하고 한 바퀴 돌았습니다. (모두 액션했거나 폴드/퇴장 예상)`);
+                // 이 경우, phaseCompleted가 true여야 하지만 false라면 논리 오류.
+                // 강제 쇼다운으로 게임을 비상 종료
+                this.showdown(roomId, true);
                 return false;
             }
 
-        } while (true);
+            // 활성 플레이어이며, 퇴장 예약도 아닌지 확인
+            if (!nextPlayer.folded && !nextPlayer.leaveReserved) {
+                // 현재 교환 페이즈이고, 이 플레이어가 이미 교환 액션을 완료했다면 스킵
+                if (room.currentPhase === 'exchange' && !nextPlayer.canExchange) {
+                    logDebug(`[GameService] Player ${nextPlayer.name} (ID: ${nextPlayer.id})는 이미 교환 완료. 턴 스킵.`);
+                } else {
+                    // 이 플레이어가 액션해야 함
+                    room.turnIndex = currentTurnIndex;
+                    room.currentTurnPlayerId = nextPlayer.id;
+                    nextTurnPlayerFound = true;
+                    logDebug(`[GameService] 방 ${roomId} 다음 턴: User ${nextPlayer.name} (ID: ${nextPlayer.id})`);
+                    this.io.to(`room-${roomId}`).emit('turnChanged', { currentPlayerId: room.currentTurnPlayerId, timeLeft: 30 });
+                    this.io.to(`room-${roomId}`).emit('roomUpdated', room); // 턴 변경 시 방 정보 업데이트
+                    return true; // 턴 성공적으로 진행
+                }
+            }
+            loopCount++;
+        } while (!nextTurnPlayerFound && loopCount < numPlayers + 1); // 무한 루프 방지를 위해 최대 플레이어 수 + 1만큼만 루프
+
+        // 루프를 빠져나왔는데도 다음 턴 플레이어를 찾지 못했다면 오류
+        errorDebug(`[GameService] 방 ${roomId} 모든 플레이어 턴 순회 후 다음 액션 플레이어를 찾을 수 없습니다. (예상치 못한 정지) - 강제 종료`);
+        this.showdown(roomId, true); // 비상 탈출: 강제 쇼다운
+        return false;
     }
 
-    // ✨ startNextRound 함수는 더 이상 GameService 클래스 내에서 직접적으로 사용되지 않습니다.
-    // ✨ advanceTurn에서 라운드 및 페이즈 전환 로직을 통합 관리합니다.
-    // ✨ 클라이언트에서 'roundStarted' 이벤트를 받으면 업데이트합니다.
+    /**
+     * ➡️ 베팅 페이즈 완료 후 다음 페이즈로 전환 (교환 또는 쇼다운).
+     * @param {number} roomId - 방 ID
+     * @returns {boolean} 전환 성공 여부
+     */
+    handlePhaseTransitionAfterBetting(roomId) {
+        const room = this.rooms[roomId];
+
+        if (room.currentBettingRoundIndex < this.maxExchangeOpportunities) { // 교환 기회가 남아있다면
+            room.currentPhase = 'exchange';
+            room.currentExchangeOpportunityIndex = room.currentBettingRoundIndex; // 예: 0, 1, 2 (총 3번)
+
+            room.players.forEach(p => {
+                if (!p.folded && !p.leaveReserved) {
+                    p.canExchange = true; // 모든 활성 플레이어에게 카드 교환 기회 부여
+                }
+            });
+
+            // 베팅 관련 플래그 초기화 (다음 베팅 라운드까지는 베팅 페이즈가 아니므로)
+            room.lastBettingPlayer = null;
+            room.players.forEach(p => p.hasActedInBettingRound = false);
+            // room.currentBet은 베팅 페이즈 종료 시점의 금액을 유지
+            // room.currentRoundBet은 각 플레이어의 베팅액을 초기화하여 다음 베팅 라운드 준비
+            room.players.forEach(p => p.currentRoundBet = 0);
+
+            logDebug(`[GameService] 방 ${roomId} ${this.bettingRoundNames[room.currentBettingRoundIndex]} 라운드의 ${room.currentExchangeOpportunityIndex + 1}번째 교환 페이즈 시작.`);
+            this.io.to(`room-${roomId}`).emit('phaseChanged', {
+                currentBettingRoundIndex: room.currentBettingRoundIndex,
+                currentExchangeOpportunityIndex: room.currentExchangeOpportunityIndex,
+                gameRoundName: this.bettingRoundNames[room.currentBettingRoundIndex], // 이 교환은 이 베팅 라운드 이름으로 진행
+                currentPhase: room.currentPhase,
+                pot: room.pot, // 팟은 누적된 상태 유지
+                currentBet: 0, // ✅ 수정: 교환 페이즈 시작 시 currentBet을 0으로 초기화
+                dealerId: room.dealerId,
+                smallBlindId: room.smallBlindId,
+                bigBlindId: room.bigBlindId
+            });
+
+            // 턴은 딜러 다음 플레이어부터 시작 (새 페이즈 시작)
+            room.turnIndex = (room.dealerIndex + 1) % room.players.length;
+            room.currentTurnPlayerId = room.players[room.turnIndex].id;
+            this.io.to(`room-${roomId}`).emit('turnChanged', { currentPlayerId: room.currentTurnPlayerId, timeLeft: 30 });
+            this.io.to(`room-${roomId}`).emit('roomUpdated', room); // 방 정보 업데이트
+            return true;
+        } else { // 더 이상 교환 기회가 없다면 쇼다운으로 진행 (마지막 베팅 라운드 후)
+            logDebug(`[GameService] 방 ${roomId} 모든 교환 기회 종료. 쇼다운으로 이동.`);
+            this.showdown(roomId, false);
+            return false;
+        }
+    }
+
+    /**
+     * ➡️ 교환 페이즈 완료 후 다음 페이즈로 전환 (다음 베팅 라운드 또는 쇼다운).
+     * @param {number} roomId - 방 ID
+     * @returns {boolean} 전환 성공 여부
+     */
+    handlePhaseTransitionAfterExchange(roomId) {
+        const room = this.rooms[roomId];
+        room.currentBettingRoundIndex++; // 다음 베팅 라운드 인덱스 증가
+
+        if (room.currentBettingRoundIndex < this.maxBettingRounds) { // 다음 베팅 라운드가 있다면
+            room.gameRoundName = this.bettingRoundNames[room.currentBettingRoundIndex];
+            room.currentPhase = 'betting'; // 다음 페이즈는 'betting'
+
+            // 새로운 베팅 라운드를 위한 초기화 (팟은 누적)
+            room.currentBet = 0; // ✅ 수정: 새로운 베팅 라운드 시작 시 currentBet을 0으로 초기화
+            room.lastBettingPlayer = null;
+            room.players.forEach(p => {
+                p.currentRoundBet = 0; // 각 플레이어의 현재 라운드 베팅액 초기화
+                p.hasActedInBettingRound = false; // 베팅 액션 여부 리셋
+                p.canExchange = false; // 교환 페이즈가 아니므로 canExchange는 false로 유지
+            });
+
+            logDebug(`[GameService] 방 ${roomId} ${room.gameRoundName} 라운드의 베팅 페이즈 시작.`);
+            this.io.to(`room-${roomId}`).emit('roundStarted', { // roundStarted 이벤트를 사용하여 새 베팅 라운드 시작을 알림
+                currentBettingRoundIndex: room.currentBettingRoundIndex,
+                currentExchangeOpportunityIndex: room.currentExchangeOpportunityIndex, // 교환 기회 인덱스는 이전 값 유지 (이전 교환 기회)
+                gameRoundName: room.gameRoundName,
+                currentPhase: room.currentPhase,
+                pot: room.pot, // 팟은 누적된 상태 유지
+                currentBet: room.currentBet, // 새로운 베팅 라운드의 초기 베팅액 (0)
+                dealerId: room.dealerId,
+                smallBlindId: room.smallBlindId,
+                bigBlindId: room.bigBlindId
+            });
+
+            // 턴은 딜러 다음 플레이어부터 시작 (새 페이즈 시작)
+            room.turnIndex = (room.dealerIndex + 1) % room.players.length;
+            room.currentTurnPlayerId = room.players[room.turnIndex].id;
+            this.io.to(`room-${roomId}`).emit('turnChanged', { currentPlayerId: room.currentTurnPlayerId, timeLeft: 30 });
+            this.io.to(`room-${roomId}`).emit('roomUpdated', room); // 방 정보 업데이트
+            return true;
+        } else { // 모든 베팅 라운드가 끝났다면 (즉, 마지막 교환 후 다음 베팅 라운드가 없는 경우)
+            logDebug(`[GameService] 방 ${roomId} 모든 베팅 라운드가 끝났습니다. 쇼다운으로 이동.`);
+            this.showdown(roomId, false);
+            return false;
+        }
+    }
+
 
     /**
      * 💰 플레이어의 베팅 액션(폴드, 체크, 콜, 레이즈, 삥, 다이)을 처리합니다.
@@ -325,57 +387,54 @@ class GameService {
 
         switch (actionType) {
             case 'check':
-                if (room.currentBet > player.currentRoundBet) {
+                if (room.currentBet > player.currentRoundBet) { // 현재 베팅액이 내 베팅액보다 높으면 체크 불가
                     return { success: false, message: '체크할 수 없습니다. 베팅 금액을 맞춰야 합니다.' };
                 }
                 this.io.to(`room-${roomId}`).emit('playerAction', { playerId, actionType: 'check', message: `${player.name}이(가) 체크했습니다.` });
                 break;
 
-            case 'bet': // '삥' (방의 기본 베팅액)
-                // '삥'은 클라이언트에서 보낸 `amount`가 `room.betAmount`여야 합니다.
+            case 'bet': // '삥' (클라이언트에서 보내는 amount는 방의 기본 베팅액)
                 if (amount !== room.betAmount) {
-                    return { success: false, message: `'삥' 액션은 ${room.betAmount} 칩으로만 가능합니다.` };
+                    return { success: false, message: `'삥' 액션은 ${room.betAmount} 칩으로만 시작할 수 있습니다.` };
                 }
 
-                // 현재 베팅액에 비해 플레이어가 추가로 지불해야 할 금액
-                const chipsToPayForBbing = room.currentBet - player.currentRoundBet;
+                const myCurrentRoundBet = player.currentRoundBet;
+                let chipsToPay = 0;
+                let newTotalBetAmount = 0;
 
-                if (chipsToPayForBbing <= 0) { // 플레이어가 이미 currentBet을 맞췄거나 초과한 경우
-                    // 이 경우 '삥'은 콜/체크의 의미가 아닌 '레이즈'로 해석
-                    // '삥' 액션은 '베팅'을 시작하거나 '최소 레이즈'를 하는 것으로 해석
-                    const newTotalBet = room.currentBet + room.betAmount; // 현재 베팅액 + 방의 최소 베팅액
-                    const chipsForRaise = newTotalBet - player.currentRoundBet;
-
-                    if (chipsForRaise <= 0) {
-                        return { success: false, message: '삥을 걸 필요가 없습니다. 체크하거나 레이즈하세요.' };
-                    }
-                    if (chipsForRaise > player.chips) {
-                        return { success: false, message: '칩이 부족하여 삥을 걸 수 없습니다.' };
-                    }
-
-                    player.chips -= chipsForRaise;
-                    room.pot += chipsForRaise;
-                    room.currentBet = newTotalBet;
-                    player.currentRoundBet = newTotalBet;
-                    room.lastBettingPlayer = playerId;
-                    this.io.to(`room-${roomId}`).emit('playerAction', { playerId, actionType: 'bet', amount: newTotalBet, message: `${player.name}이(가) ${newTotalBet} 칩으로 삥을 걸었습니다.` });
-
-                } else { // 플레이어가 currentBet을 맞춰야 하는 경우
-                    // '삥'은 '콜'로 해석
-                    if (chipsToPayForBbing > player.chips) {
-                        return { success: false, message: '칩이 부족하여 삥(콜)을 할 수 없습니다.' };
-                    }
-                    player.chips -= chipsToPayForBbing;
-                    room.pot += chipsToPayForBbing;
-                    player.currentRoundBet = room.currentBet;
-                    room.lastBettingPlayer = playerId;
-                    this.io.to(`room-${roomId}`).emit('playerAction', { playerId, actionType: 'bet', amount: room.currentBet, message: `${player.name}이(가) ${room.currentBet} 칩으로 삥(콜)했습니다.` });
+                // 시나리오 1: 현재 베팅액이 0인 경우 (이 라운드에서 아무도 베팅하지 않은 첫 액션)
+                if (room.currentBet === 0) {
+                    newTotalBetAmount = room.betAmount; // 총 베팅액을 방의 기본 베팅액으로 설정
+                    chipsToPay = newTotalBetAmount - myCurrentRoundBet; // 이 경우 myCurrentRoundBet도 0일 것
                 }
+                // 시나리오 2: 현재 베팅액이 방의 최소 베팅액과 같고, 내가 이미 그만큼 베팅한 경우 (안테만 낸 상태에서 첫 레이즈)
+                else if (room.currentBet === room.betAmount && myCurrentRoundBet === room.betAmount) {
+                    newTotalBetAmount = room.currentBet + room.betAmount; // 총 베팅액을 (현재 베팅액 + 방의 기본 베팅액)으로 설정 (최소 레이즈)
+                    chipsToPay = newTotalBetAmount - myCurrentRoundBet; // 방의 기본 베팅액만큼 추가 지불
+                }
+                // 그 외의 경우 (누군가 이미 레이즈했거나, currentBet이 room.betAmount를 초과하는 경우) '삥' 액션 불가
+                else {
+                    return { success: false, message: '삥은 현재 베팅이 없거나 안테만 있는 경우에만 시작할 수 있습니다.' };
+                }
+
+                if (chipsToPay <= 0) {
+                    return { success: false, message: '삥을 걸 필요가 없습니다. 체크 또는 레이즈하세요.' };
+                }
+                if (chipsToPay > player.chips) {
+                    return { success: false, message: '칩이 부족하여 삥을 걸 수 없습니다.' };
+                }
+
+                player.chips -= chipsToPay;
+                room.pot += chipsToPay;
+                room.currentBet = newTotalBetAmount;
+                player.currentRoundBet = newTotalBetAmount;
+                room.lastBettingPlayer = playerId;
+                this.io.to(`room-${roomId}`).emit('playerAction', { playerId, actionType: 'bet', amount: newTotalBetAmount, message: `${player.name}이(가) ${newTotalBetAmount} 칩으로 삥을 걸었습니다.` });
                 break;
 
             case 'call':
                 const amountToCall = room.currentBet - player.currentRoundBet;
-                if (amountToCall <= 0) { // 콜할 필요 없음 (베팅 금액이 같거나 내가 더 많이 베팅한 경우)
+                if (amountToCall <= 0) { // 콜할 필요 없음
                     return { success: false, message: '콜할 필요가 없습니다. 체크하거나 레이즈하세요.' };
                 }
                 if (amountToCall > player.chips) {
@@ -389,13 +448,12 @@ class GameService {
                 break;
 
             case 'raise':
-                // amount는 플레이어가 총 베팅하고자 하는 금액 (내 currentRoundBet 포함)
-                const minRaiseTotalAmount = room.currentBet + room.betAmount; // 최소 레이즈 총액
-                if (amount < minRaiseTotalAmount) {
-                    return { success: false, message: `유효하지 않은 레이즈 금액입니다. 총 ${minRaiseTotalAmount} 칩 이상을 베팅해야 합니다.` };
+                const minRaiseAmountTotal = room.currentBet + room.betAmount; // 최소 레이즈 총액
+                if (amount < minRaiseAmountTotal) {
+                    return { success: false, message: `유효하지 않은 레이즈 금액입니다. 총 ${minRaiseAmountTotal} 칩 이상을 베팅해야 합니다.` };
                 }
                 const amountToRaise = amount - player.currentRoundBet; // 실제로 칩에서 차감할 금액
-                if (amountToRaise <= 0) {
+                if (amountToRaise <= 0) { // 레이즈인데 추가 금액이 0이거나 음수
                     return { success: false, message: '레이즈 금액이 유효하지 않습니다. 현재 베팅액보다 높아야 합니다.' };
                 }
                 if (amountToRaise > player.chips) {
@@ -411,11 +469,9 @@ class GameService {
                 break;
 
             case 'die': // '다이' (폴드와 동일)
-            case 'fold':
                 this.io.to(`room-${roomId}`).emit('playerAction', { playerId, actionType: 'die', message: `${player.name}이(가) 다이를 선언했습니다.` });
                 player.folded = true;
                 player.status = 'folded';
-                // room.activePlayers는 advanceTurn에서 필터링
                 break;
 
             default:
@@ -423,9 +479,7 @@ class GameService {
                 return { success: false, message: '알 수 없는 액션입니다.' };
         }
 
-        // 액션 처리 후 다음 턴으로 진행
         this.advanceTurn(roomId);
-        this.io.to(`room-${roomId}`).emit('roomUpdated', room); // 방 정보 업데이트
         return { success: true };
     }
 
@@ -447,16 +501,12 @@ class GameService {
         if (room.currentPhase !== 'exchange') {
             return { success: false, message: '지금은 카드 교환 페이즈가 아닙니다.' };
         }
-        // 아침(0) 라운드에는 교환 불가 (currentRound는 1: 점심부터 교환 가능)
-        if (room.currentRound === 0) {
-            return { success: false, message: '아침 라운드에는 카드를 교환할 수 없습니다. 베팅만 가능합니다.' };
-        }
-        if (room.currentRound >= room.maxRounds) { // 모든 라운드가 끝났거나 마지막 라운드 저녁(2) 이후
-            return { success: false, message: '더 이상 카드를 교환할 수 없습니다. 게임이 곧 종료됩니다.' };
+        if (room.currentExchangeOpportunityIndex === -1 || room.currentExchangeOpportunityIndex >= this.maxExchangeOpportunities) {
+            return { success: false, message: '현재 라운드에는 카드를 교환할 수 없습니다.' };
         }
         const player = room.players.find(p => p.id === playerId);
         if (!player) { return { success: false, message: '플레이어를 찾을 수 없습니다.' }; }
-        if (!player.canExchange) { // 이번 라운드에 이미 교환했거나 스테이한 경우
+        if (!player.canExchange) {
             return { success: false, message: '이번 라운드에 카드를 교환할 수 없습니다.' };
         }
         if (player.folded) {
@@ -471,7 +521,6 @@ class GameService {
             player.canExchange = false; // 이번 라운드 카드 교환 기회 사용
             this.io.to(`room-${roomId}`).emit('playerAction', { playerId, actionType: 'stay', message: `${player.name}이(가) 스테이했습니다.` });
             this.advanceTurn(roomId);
-            this.io.to(`room-${roomId}`).emit('roomUpdated', room);
             return { success: true };
         }
 
@@ -479,13 +528,12 @@ class GameService {
         if (!playerHand) { return { success: false, message: '플레이어의 패를 찾을 수 없습니다.' }; }
 
         const idsToExchangeSet = new Set(cardsToExchange);
-        // 플레이어 패에 실제로 교환하려는 카드가 있는지 확인
         const actualCardsToExchange = playerHand.filter(card => idsToExchangeSet.has(card.id));
         if (actualCardsToExchange.length !== cardsToExchange.length) {
             return { success: false, message: '교환하려는 카드 중 일부가 패에 존재하지 않습니다.' };
         }
 
-        const newHand = playerHand.filter(card => !idsToExchangeSet.has(card.id)); // 교환할 카드 제외
+        const newHand = playerHand.filter(card => !idsToExchangeSet.has(card.id));
 
         const cardsDrawn = [];
         for (let i = 0; i < cardsToExchange.length; i++) {
@@ -518,8 +566,7 @@ class GameService {
         });
         this.io.to(player.socketId).emit('myHandUpdated', { hand: newHand, bestHand: player.bestHand });
 
-        this.advanceTurn(roomId); // 교환 후 다음 턴으로 진행
-        this.io.to(`room-${roomId}`).emit('roomUpdated', room); // 방 정보 업데이트
+        this.advanceTurn(roomId);
         return { success: true };
     }
 
@@ -554,7 +601,6 @@ class GameService {
                 finalHands: room.hands,
                 finalPlayers: room.players.map(p => ({ id: p.id, name: p.name, chips: p.chips, bestHand: p.bestHand, isCreator: p.isCreator, folded: p.folded, status: p.status }))
             });
-            // 게임 종료 후 모든 플레이어의 상태를 'waiting'으로 변경하고, 퇴장 예약 플레이어는 방에서 제거
             this.cleanupRoomAfterGame(roomId);
             return;
         }
@@ -584,7 +630,6 @@ class GameService {
 
                 const finalHandsToShow = {};
                 room.players.forEach(p => {
-                    // 폴드하지 않았거나, 승자인 경우 패 공개 (기본)
                     if (!p.folded || winners.some(w => w.playerId === p.id)) {
                         finalHandsToShow[p.id] = room.hands[p.id];
                     }
@@ -604,11 +649,9 @@ class GameService {
                 this.io.to(`room-${roomId}`).emit('gameEnded', { roomStatus: room.status, reason: '승자를 찾을 수 없습니다. (오류)' });
             }
         } else {
-            // 활성 플레이어가 0명인 경우 (모두 폴드 또는 퇴장)
             room.status = 'ended';
             this.io.to(`room-${roomId}`).emit('gameEnded', { roomStatus: room.status, reason: '모든 플레이어가 게임에서 퇴장했습니다.' });
         }
-        // 게임 종료 후 정리
         this.cleanupRoomAfterGame(roomId);
         this.io.to(`room-${roomId}`).emit('roomUpdated', room); // 최종 방 정보 업데이트
     }
@@ -623,12 +666,16 @@ class GameService {
         if (!room) return;
 
         room.status = 'waiting';
-        room.currentRound = 0;
+        room.currentBettingRoundIndex = 0; // 초기화
+        room.currentExchangeOpportunityIndex = -1; // 초기화
         room.gameRoundName = '대기 중';
         room.pot = 0;
         room.currentBet = 0;
         room.lastBettingPlayer = null;
         room.currentPhase = 'waiting'; // 페이즈도 초기화
+        room.dealerId = -1; // 역할 ID 초기화
+        room.smallBlindId = -1;
+        room.bigBlindId = -1;
 
         // 퇴장 예약된 플레이어 제거
         room.players = room.players.filter(player => {
@@ -642,7 +689,7 @@ class GameService {
             player.folded = false;
             player.status = 'waiting';
             player.bestHand = null;
-            player.canExchange = true;
+            player.canExchange = false; // canExchange 초기화
             player.hasActedInBettingRound = false;
             return true; // 방에 남김
         });

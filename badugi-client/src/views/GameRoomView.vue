@@ -2,46 +2,65 @@
   <div class="game-room-page-wrapper container">
     <h1 class="text-center">게임 방 (ID: {{ roomId }})</h1>
     <p class="text-center">이곳은 실제 바둑이 게임이 진행되는 공간입니다.</p>
-    <p class="text-center">방 제목: {{ roomName }}</p>
-    <p class="text-center">현재 인원: {{ players.length }}명 / 베팅: {{ betAmount }}</p>
 
-    <!-- 라운드 정보 표시 -->
-    <h2 class="text-center mt-3 mb-4">현재 라운드: <span class="badge badge-primary">{{ gameRoundName }}</span></h2>
+    <div class="room-info-summary mb-4 p-3 border rounded bg-light">
+        <p class="mb-1">방 제목: <strong>{{ roomName }}</strong></p>
+        <p class="mb-1">최소 베팅액: <strong>{{ betAmount }} 칩</strong> | 현재 팟: <strong>{{ pot }} 칩</strong> | 현재 최고 베팅액: <strong>{{ currentBet }} 칩</strong></p>
+        <p class="mb-1">현재 인원: <strong>{{ players.length }}</strong>명 / 최대: <strong>{{ room.maxPlayers }}</strong>명</p>
+        <p class="mb-1">
+            게임 상태: <span class="badge" :class="{'badge-success': roomStatus === 'playing', 'badge-info': roomStatus === 'waiting', 'badge-warning': roomStatus === 'showdown', 'badge-dark': roomStatus === 'ended'}">{{ displayRoomStatus }}</span>
+            <span class="ml-2">페이즈: <span class="badge" :class="{'badge-primary': currentPhase === 'betting', 'badge-info': currentPhase === 'exchange', 'badge-secondary': currentPhase === 'waiting'}">{{ displayCurrentPhase }}</span></span>
+        </p>
+        <p class="mb-0">
+            라운드: <strong class="text-primary">{{ gameRoundName }}</strong>
+            (베팅 라운드: {{ currentBettingRoundIndex + 1 }}/{{ maxBettingRounds }})
+            <span v-if="currentExchangeOpportunityIndex > -1" class="ml-2">(교환 기회: {{ currentExchangeOpportunityIndex + 1 }}/{{ maxExchangeOpportunities }})</span>
+        </p>
+        <p v-if="currentTurnPlayer" class="mt-2 mb-0">현재 턴: <strong class="text-success">{{ currentTurnPlayer.name }}</strong> 님</p>
+    </div>
 
     <div class="player-list mb-4">
         <h4>참가자</h4>
         <ul class="list-group">
-            <li v-for="player in players" :key="player.id" class="list-group-item">
+            <li v-for="player in players" :key="player.id" class="list-group-item" :class="{'active-player-turn': player.id == currentTurnPlayerId}">
                 <div class="d-flex justify-content-between align-items-center">
                     <div>
-                        {{ player.name }} (칩: {{ player.chips }}) <span v-if="player.id == myUserId">(나)</span>
-                        <span v-if="player.isCreator" class="badge badge-info ml-1">방장</span>
-                        <span v-if="player.leaveReserved" class="badge badge-warning ml-1">퇴장 예약됨</span>
+                        <strong>{{ player.name }}</strong>
+                        <span v-if="player.id == myUserId">(나)</span>
+                        (칩: {{ player.chips }})
+                        <span v-if="player.currentRoundBet > 0" class="badge badge-warning ml-1">이번 라운드 베팅: {{ player.currentRoundBet }}</span>
+                        <!-- 역할 배지 추가 -->
+                        <span v-for="role in getPlayerRoleBadges(player)" :key="role.text" class="badge ml-1" :class="role.class">{{ role.text }}</span>
+                        <!-- 기존 상태 배지 유지 -->
+                        <span v-if="player.leaveReserved" class="badge badge-danger ml-1">퇴장 예약됨</span>
                         <span v-if="player.folded" class="badge badge-secondary ml-1">폴드</span>
-                        <span v-if="player.id == currentTurnPlayerId" class="badge badge-success ml-1">내 턴</span>
+                        <span v-if="player.id == currentTurnPlayerId && roomStatus === 'playing'" class="badge badge-success ml-1">현재 턴</span>
                     </div>
                     <div>
                         <span v-if="player.bestHand && player.bestHand.rank !== 'Invalid'" class="badge badge-primary ml-1">
                             {{ player.bestHand.badugiCount }}구 {{ player.bestHand.rank.split('-')[0] }}
                         </span>
-                        <span v-else class="badge badge-secondary ml-1">패 없음</span>
+                        <span v-else-if="roomStatus === 'playing'" class="badge badge-secondary ml-1">패 없음</span>
                     </div>
                 </div>
                 <!-- 카드 표시 영역 -->
                 <div class="player-hand mt-2">
                     <div v-for="(card, index) in getPlayerCards(player.id)" :key="card ? card.id : `${player.id}-card-back-${index}`"
                          :class="getCardClass(card, player.id === myUserId || (roomStatus === 'showdown' || roomStatus === 'ended'), isCardSelected(card ? card.id : null))"
-                         :title="card && (player.id === myUserId || (roomStatus === 'showdown' || roomStatus === 'ended')) ? `${card.suit}${card.rank}` : 'Hidden Card'"
-                         @click="player.id === myUserId && roomStatus === 'playing' && isMyTurn && card ? toggleCardSelection(card.id) : null"
+                         :title="getCardTitle(card, player.id === myUserId)"
+                         @click="player.id === myUserId && roomStatus === 'playing' && isMyTurn && currentPhase === 'exchange' && myPlayer?.canExchange && card ? toggleCardSelection(card.id) : null"
                     >
+                        <!-- card가 null이거나, 뒷면 표시가 필요한 경우 -->
                         <img v-if="!shouldShowCardFace(card, player.id === myUserId)" src="/cards/card_back.png" alt="Card Back" class="card-image-back">
+                        <!-- 카드 앞면은 getCardClass에서 background-image로 처리됨 -->
                     </div>
                 </div>
             </li>
         </ul>
     </div>
 
-    <div class="d-flex justify-content-center mt-4">
+    <div class="d-flex justify-content-center mt-4 action-buttons-row">
+        <!-- 방 나가기 및 게임 시작 버튼 -->
         <button @click="handleLeaveRoom" :class="['btn', { 'btn-danger': !myPlayer?.leaveReserved, 'btn-secondary': myPlayer?.leaveReserved }]">
             <span v-if="isRoomCreator && players.length > 1 && room.status === 'waiting'">방장 퇴장 불가</span>
             <span v-else-if="room.status === 'playing' && !myPlayer?.leaveReserved">게임 종료 후 나가기 예약</span>
@@ -50,26 +69,57 @@
         <button v-if="isRoomCreator && room.status === 'waiting'" @click="startGame" class="btn btn-success ml-2" :disabled="players.length < 2">게임 시작</button>
         <button v-if="room.status === 'playing' && myPlayer?.leaveReserved" @click="cancelLeaveRoom" class="btn btn-warning ml-2">예약 취소</button>
 
-        <!-- 액션 버튼 -->
         <template v-if="room.status === 'playing' && isMyTurn && !myPlayer?.folded && !myPlayer?.leaveReserved">
-            <!-- 'betting' 페이즈에서 베팅 관련 액션 -->
+
+            <!-- 베팅 페이즈 버튼 -->
             <template v-if="currentPhase === 'betting'">
-                <button @click="handlePlayerAction('check')" class="btn btn-primary ml-2" :disabled="!canCheck">첵</button>
+                <button @click="handlePlayerAction('check')" class="btn btn-primary ml-2" :disabled="!canCheck">체크</button>
                 <button @click="handlePlayerAction('call')" class="btn btn-primary ml-2" :disabled="!canCall">콜</button>
-                <!-- '삥' 버튼은 항상 betAmount를 표시하고, 서버에는 해당 액션의 의도에 맞는 금액을 보냅니다. -->
                 <button @click="handlePlayerAction('bet', betAmount)" class="btn btn-info ml-2" :disabled="!canBbing">삥 ({{ betAmount }})</button>
                 <button @click="handlePlayerAction('raise', getRaiseAmountForHalf)" class="btn btn-info ml-2" :disabled="!canRaiseToHalf">하프 ({{ getRaiseAmountForHalf }})</button>
                 <button @click="handlePlayerAction('raise', getRaiseAmountForFull)" class="btn btn-info ml-2" :disabled="!canRaiseToFull">풀 ({{ getRaiseAmountForFull }})</button>
                 <button @click="handlePlayerAction('die')" class="btn btn-dark ml-2" :disabled="!canDie">다이</button>
             </template>
 
-            <!-- 'exchange' 페이즈에서 카드 교환 또는 스테이 액션 -->
-            <template v-else-if="currentPhase === 'exchange'">
+            <!-- 교환 페이즈 버튼 - canExchange가 true일 때만 표시 -->
+            <template v-else-if="currentPhase === 'exchange' && myPlayer?.canExchange">
                 <button @click="handlePlayerAction('exchange', selectedCardsIds)" class="btn btn-warning ml-2" :disabled="!canExchangeCards">카드 교환 ({{ selectedCardsIds.length }}장)</button>
                 <button @click="handlePlayerAction('stay')" class="btn btn-light ml-2" :disabled="!canStay">스테이</button>
-                <button @click="handlePlayerAction('die')" class="btn btn-dark ml-2" :disabled="!canDie">다이</button>
+                <!-- 카드 교환 페이즈에서는 '다이' 버튼 제거 요청 -->
+                <!-- <button @click="handlePlayerAction('die')" class="btn btn-dark ml-2" :disabled="!canDie">다이</button> -->
             </template>
+
+            <!-- 교환 페이즈지만 이미 액션한 경우 대기 메시지 -->
+            <template v-else-if="currentPhase === 'exchange' && !myPlayer?.canExchange">
+                <div class="alert alert-info ml-2 mb-0 py-2 px-3" style="display: inline-block;">
+                    다른 플레이어의 카드 교환을 기다리는 중...
+                </div>
+            </template>
+
         </template>
+    </div>
+
+    <!-- 디버그 패널 -->
+    <div class="debug-panel mt-3 p-2 border rounded" style="background: #f0f0f0; font-size: 0.8em;">
+        <h6>🔧 디버그 정보</h6>
+        <p>게임 상태: <strong>{{ roomStatus }}</strong>, 페이즈: <strong>{{ currentPhase }}</strong>, 라운드: <strong>{{ gameRoundName }} ({{ currentBettingRoundIndex + 1 }}/{{ maxBettingRounds }})</strong></p>
+        <p>내 턴: <strong>{{ isMyTurn ? 'Yes' : 'No' }}</strong>, 내 ID: <strong>{{ myUserId }}</strong>, 현재 턴 ID: <strong>{{ currentTurnPlayerId }}</strong></p>
+        <p>딜러 ID: <strong>{{ dealerId || 'N/A' }}</strong>, SB ID: <strong>{{ smallBlindId || 'N/A' }}</strong>, BB ID: <strong>{{ bigBlindId || 'N/A' }}</strong></p>
+        <hr>
+        <p>내 칩: <strong>{{ myPlayer?.chips }}</strong>, 내 이번 라운드 베팅: <strong>{{ myPlayer?.currentRoundBet }}</strong></p>
+        <p>룸 총 팟: <strong>{{ pot }}</strong>, 룸 현재 최고 베팅: <strong>{{ currentBet }}</strong>, 방 최소 베팅액: <strong>{{ betAmount }}</strong></p>
+        <p>내 `canExchange`: <strong>{{ myPlayer?.canExchange }}</strong>, 내 `folded`: <strong>{{ myPlayer?.folded }}</strong>, 내 `leaveReserved`: <strong>{{ myPlayer?.leaveReserved }}</strong></p>
+        <p>삥 버튼 클릭 시 낼 칩: <strong>{{ myChipsToPayForBbing }}</strong> (예상)</p>
+        <hr>
+        <p>버튼 활성화 상태:</p>
+        <p style="font-size: 0.75em; margin-left: 10px;">
+            Check: <strong>{{ canCheck }}</strong>, Call: <strong>{{ canCall }}</strong>, Bbing: <strong>{{ canBbing }}</strong>,
+            Half ({{ getRaiseAmountForHalf }}): <strong>{{ canRaiseToHalf }}</strong>, Full ({{ getRaiseAmountForFull }}): <strong>{{ canRaiseToFull }}</strong>,
+            Die: <strong>{{ canDie }}</strong>
+        </p>
+        <p style="font-size: 0.75em; margin-left: 10px;">
+            Exchange ({{ selectedCardsIds.length }}장): <strong>{{ canExchangeCards }}</strong>, Stay: <strong>{{ canStay }}</strong>
+        </p>
     </div>
 
     <!-- 게임 종료 결과 모달 -->
@@ -92,7 +142,7 @@
                 </div>
                 <p>족보: {{ players.find(p => p.id == playerId)?.bestHand?.rank }} (점수: {{ players.find(p => p.id == playerId)?.bestHand?.value }})</p>
             </div>
-            <button @click="closeGameEndedModal" class="btn btn-primary mt-4">확인</button>
+            <button @click.stop="closeGameEndedModal" class="btn btn-primary mt-4">확인</button>
         </div>
     </div>
 
@@ -118,18 +168,29 @@ const myUserId = ref(parseInt(localStorage.getItem('user_id')));
 const roomStatus = ref('loading');
 const roomCreatorId = ref(null);
 const currentBet = ref(0); // 현재 라운드의 최고 베팅액
+const pot = ref(0); // 현재 팟 금액
 
 const myHand = ref([]);
 const currentTurnPlayerId = ref(null);
 
-const gameRound = ref(0); // 현재 라운드 (0: 아침, 1: 점심, 2: 저녁)
-const gameRoundName = ref('대기 중'); // 현재 라운드 이름 (아침, 점심, 저녁)
+// ✨ 게임 진행 상태 변수들
+const currentBettingRoundIndex = ref(0); // 현재 베팅 라운드 인덱스 (0, 1, 2, 3)
+const currentExchangeOpportunityIndex = ref(-1); // 현재 교환 기회 인덱스 (-1, 0, 1, 2)
+const gameRoundName = ref('대기 중'); // 현재 베팅 라운드 이름 (아침, 점심, 저녁, 최종)
+const currentPhase = ref('loading'); // 'betting', 'exchange'
+
+const maxBettingRounds = ref(4); // 서버와 동기화 (기본 4)
+const maxExchangeOpportunities = ref(3); // 서버와 동기화 (기본 3)
+
 const showGameEndedModal = ref(false); // 게임 종료 모달 표시 여부
 const gameWinnerNames = ref([]); // 게임 승자 이름 목록
 const gameEndReason = ref(''); // 게임 종료 이유
 const finalHands = ref({}); // 최종 패 공개
-const currentPhase = ref('loading'); // 'betting', 'exchange'
-const maxRounds = ref(3); // 총 라운드 수 (아침, 점심, 저녁)
+
+// ✨ 블라인드/딜러 역할 ID 추가
+const dealerId = ref(null);
+const smallBlindId = ref(null);
+const bigBlindId = ref(null);
 
 const isMyTurn = computed(() => currentTurnPlayerId.value === myUserId.value);
 
@@ -138,7 +199,18 @@ const isRoomCreator = computed(() => {
 });
 
 const myPlayer = computed(() => {
-    return players.value.find(p => p.id === myUserId.value);
+    const player = players.value.find(p => p.id === myUserId.value);
+    if (player) {
+        // 클라이언트 측에서 역할 정보 추가 (서버에서 받은 ID 기반)
+        player.isDealer = dealerId.value === myUserId.value;
+        player.isSmallBlind = smallBlindId.value === myUserId.value;
+        player.isBigBlind = bigBlindId.value === myUserId.value;
+    }
+    return player;
+});
+
+const currentTurnPlayer = computed(() => {
+    return players.value.find(p => p.id === currentTurnPlayerId.value);
 });
 
 const selectedCardsIds = ref([]); // 교환할 카드 ID 목록
@@ -148,16 +220,53 @@ const room = computed(() => ({
     id: roomId.value,
     name: roomName.value,
     betAmount: betAmount.value,
+    maxPlayers: 5, // 서버에서 받아오지 못했을 때 기본값 (server.js에서 room 생성 시 maxPlayers 5로 고정)
     players: players.value,
     status: roomStatus.value,
     creatorId: roomCreatorId.value,
     currentTurnPlayerId: currentTurnPlayerId.value,
-    currentRound: gameRound.value,
+    currentBet: currentBet.value,
+    pot: pot.value,
+    currentBettingRoundIndex: currentBettingRoundIndex.value,
+    currentExchangeOpportunityIndex: currentExchangeOpportunityIndex.value,
     gameRoundName: gameRoundName.value,
     currentPhase: currentPhase.value,
-    currentBet: currentBet.value, // 현재 최고 베팅액
-    maxRounds: maxRounds.value
+    maxBettingRounds: maxBettingRounds.value,
+    maxExchangeOpportunities: maxExchangeOpportunities.value,
+    dealerId: dealerId.value, // NEW: 딜러 ID 포함
+    smallBlindId: smallBlindId.value, // NEW: 스몰 블라인드 ID 포함
+    bigBlindId: bigBlindId.value // NEW: 빅 블라인드 ID 포함
 }));
+
+// ✨ UI 표시용 상태명 변환
+const displayRoomStatus = computed(() => {
+    switch(roomStatus.value) {
+        case 'waiting': return '대기 중';
+        case 'playing': return '게임 중';
+        case 'showdown': return '쇼다운';
+        case 'ended': return '게임 종료';
+        default: return '알 수 없음';
+    }
+});
+
+const displayCurrentPhase = computed(() => {
+    switch(currentPhase.value) {
+        case 'betting': return '베팅 페이즈';
+        case 'exchange': return '카드 교환 페이즈';
+        case 'waiting': return '대기';
+        default: return '알 수 없음';
+    }
+});
+
+// --- 플레이어 역할 배지 생성을 위한 헬퍼 함수 ---
+const getPlayerRoleBadges = (player) => {
+    const roles = [];
+    if (player.isCreator) roles.push({ text: '방장', class: 'badge-info' });
+    if (player.isDealer) roles.push({ text: 'D', class: 'badge-dark' }); // Dealer
+    if (player.isSmallBlind) roles.push({ text: 'SB', class: 'badge-warning' }); // Small Blind
+    if (player.isBigBlind) roles.push({ text: 'BB', class: 'badge-danger' }); // Big Blind
+    return roles;
+};
 
 // --- 액션 버튼 활성화/비활성화 로직 (Computed Properties) ---
 const canBettingAction = computed(() => {
@@ -165,46 +274,72 @@ const canBettingAction = computed(() => {
            room.value.status === 'playing' && room.value.currentPhase === 'betting';
 });
 
-const canExchangePhaseAction = computed(() => {
-    return isMyTurn.value && !myPlayer.value?.folded && !myPlayer.value?.leaveReserved &&
-           room.value.status === 'playing' && room.value.currentPhase === 'exchange';
-});
-
 const canCheck = computed(() => {
+    // 체크는 내 현재 베팅액이 룸의 현재 최고 베팅액과 같을 때만 가능
+    // (즉, 내가 이미 모든 베팅에 맞춰 냈거나, 아무도 베팅하지 않은 상태)
     return canBettingAction.value && room.value.currentBet === (myPlayer.value?.currentRoundBet || 0);
 });
 
 const canCall = computed(() => {
     const amountToCall = room.value.currentBet - (myPlayer.value?.currentRoundBet || 0);
+    // 콜은 내 현재 베팅액이 룸의 현재 최고 베팅액보다 낮고, 칩이 충분할 때만 가능
+    // 즉, amountToCall이 0보다 커야 콜할 수 있음
     return canBettingAction.value && amountToCall > 0 && amountToCall <= (myPlayer.value?.chips || 0);
 });
 
+// '삥' (bet) 액션 활성화 조건 (GameService와 동기화)
 const canBbing = computed(() => {
     if (!canBettingAction.value) return false;
 
     const myChips = myPlayer.value?.chips || 0;
-    const bbingAmount = room.value.betAmount; // '삥'은 항상 방의 기본 베팅액
+    const bbingAmount = room.value.betAmount; // '삥'의 기본 단위는 방의 최소 베팅액
     const myCurrentRoundBet = myPlayer.value?.currentRoundBet || 0;
 
-    // '삥'을 통해 도달하려는 총 베팅액 (서버의 로직과 일치해야 함)
-    // 서버: '삥' 금액(amount)이 room.betAmount로 왔을 때
-    // 1. (currentBet - myCurrentRoundBet) <= 0: 내가 이미 베팅액을 맞췄거나 초과 -> 레이즈로 처리
-    //    -> newTotalBet = room.currentBet + room.betAmount
-    // 2. (currentBet - myCurrentRoundBet) > 0: 내가 베팅액을 맞춰야 함 -> 콜로 처리
-    //    -> newTotalBet = room.currentBet
+    let chipsToPay = 0;
+    let validBbingCondition = false;
 
-    let targetTotalBet;
-    const chipsToCoverCurrentBet = room.value.currentBet - myCurrentRoundBet;
-
-    if (chipsToCoverCurrentBet <= 0) { // 내가 이미 베팅액을 맞췄거나 초과한 경우
-        targetTotalBet = room.value.currentBet + bbingAmount; // 삥은 레이즈 의미
-    } else { // 내가 베팅액을 맞춰야 하는 경우
-        targetTotalBet = room.value.currentBet; // 삥은 콜 의미
+    // 시나리오 1: 현재 룸의 최고 베팅액이 방의 최소 베팅액과 같고, 내가 이미 그만큼 베팅한 경우
+    // (예: 모든 플레이어가 안테를 100씩 냈고, currentBet도 100인 상태에서 내가 첫 레이즈(삥)를 거는 상황)
+    // 이 시나리오는 `handlePhaseTransitionAfterExchange`에서 `currentBet`을 `0`으로 초기화함으로써 방지됨.
+    // 따라서, 이 조건은 현재 게임 로직 상 `false`가 될 가능성이 높음.
+    /*
+    if (room.value.currentBet === room.value.betAmount && myCurrentRoundBet === room.value.betAmount) {
+        chipsToPay = bbingAmount; // 추가로 bbingAmount만큼 내야 함 (레이즈)
+        validBbingCondition = true;
+    }
+    */
+    // 시나리오 2: 현재 룸의 최고 베팅액이 0인 경우 (이 라운드에서 아무도 베팅하지 않은 첫 액션)
+    // `handlePhaseTransitionAfterExchange`에서 `currentBet`이 `0`으로 초기화되므로,
+    // 이 조건은 새로운 베팅 라운드 시작 시 첫 번째 액션으로 '삥'을 할 수 있도록 활성화됨.
+    if (room.value.currentBet === 0) {
+        chipsToPay = bbingAmount - myCurrentRoundBet; // 이 경우 myCurrentRoundBet도 0일 것
+        if (chipsToPay > 0) {
+            validBbingCondition = true;
+        }
+    }
+    // 그 외의 경우 (누군가 이미 레이즈했거나, currentBet이 room.betAmount를 초과하는 경우) '삥' 액션 불가
+    else {
+        return false;
     }
 
-    const chipsNeeded = targetTotalBet - myCurrentRoundBet;
+    return validBbingCondition && myChips >= chipsToPay;
+});
 
-    return chipsNeeded > 0 && myChips >= chipsNeeded;
+// '삥' 버튼 클릭 시 실제로 나갈 칩 금액을 계산하는 computed 속성
+const myChipsToPayForBbing = computed(() => {
+    if (!canBettingAction.value) return 0; // 버튼이 비활성화되면 0
+
+    const bbingAmount = room.value.betAmount;
+    const myCurrentRoundBet = myPlayer.value?.currentRoundBet || 0;
+
+    // `canBbing`의 로직과 동일하게 계산
+    if (room.value.currentBet === room.value.betAmount && myCurrentRoundBet === room.value.betAmount) {
+        return bbingAmount;
+    } else if (room.value.currentBet === 0) {
+        return bbingAmount - myCurrentRoundBet;
+    } else {
+        return 0; // '삥' 불가 상황
+    }
 });
 
 
@@ -218,12 +353,14 @@ const calculateChipsNeededForTotalBet = (totalTargetBet) => {
 };
 
 const getRaiseAmountForHalf = computed(() => {
-    // '하프'는 현재 베팅액 + 팟의 절반
     const pot = room.value.pot || 0;
     const currentBet = room.value.currentBet || 0;
-    const halfPot = Math.floor(pot / 2);
-    // 최소 레이즈 금액 이상이 되도록 보장
-    return Math.max(currentBet + halfPot, getMinRaiseTotalAmount.value);
+    const minRaise = room.value.betAmount || 0; // 최소 레이즈 단위
+
+    let targetRaiseAmount = currentBet + Math.floor(pot / 2);
+    // 최소 레이즈 금액(현재 베팅액 + 최소 베팅 단위)보다 낮으면 최소 레이즈 금액으로 설정
+    // 또한, 0보다 작은 값은 없도록 Math.max
+    return Math.max(targetRaiseAmount, currentBet + minRaise, minRaise); // 최소한 minRaise는 되어야 함
 });
 
 const canRaiseToHalf = computed(() => {
@@ -232,15 +369,19 @@ const canRaiseToHalf = computed(() => {
     const amountNeeded = calculateChipsNeededForTotalBet(totalTargetBet);
     const myChips = myPlayer.value?.chips || 0;
 
-    return amountNeeded > 0 && myChips >= amountNeeded;
+    // 레이즈 금액이 currentBet보다 커야 하고, 칩이 충분해야 함
+    return totalTargetBet > room.value.currentBet && amountNeeded > 0 && myChips >= amountNeeded;
 });
 
 const getRaiseAmountForFull = computed(() => {
-    // '풀'은 현재 베팅액 + 팟 전체
     const pot = room.value.pot || 0;
     const currentBet = room.value.currentBet || 0;
-    // 최소 레이즈 금액 이상이 되도록 보장
-    return Math.max(currentBet + pot, getMinRaiseTotalAmount.value);
+    const minRaise = room.value.betAmount || 0;
+
+    let targetRaiseAmount = currentBet + pot;
+    // 최소 레이즈 금액(현재 베팅액 + 최소 베팅 단위)보다 낮으면 최소 레이즈 금액으로 설정
+    // 또한, 0보다 작은 값은 없도록 Math.max
+    return Math.max(targetRaiseAmount, currentBet + minRaise, minRaise);
 });
 
 const canRaiseToFull = computed(() => {
@@ -249,7 +390,8 @@ const canRaiseToFull = computed(() => {
     const amountNeeded = calculateChipsNeededForTotalBet(totalTargetBet);
     const myChips = myPlayer.value?.chips || 0;
 
-    return amountNeeded > 0 && myChips >= amountNeeded;
+    // 레이즈 금액이 currentBet보다 커야 하고, 칩이 충분해야 함
+    return totalTargetBet > room.value.currentBet && amountNeeded > 0 && myChips >= amountNeeded;
 });
 
 const canDie = computed(() => {
@@ -257,48 +399,53 @@ const canDie = computed(() => {
 });
 
 const canExchangeCards = computed(() => {
-    // 아침(0) 라운드에는 교환 불가.
-    // currentRound는 1: 점심, 2: 저녁 라운드에서만 가능
-    return canExchangePhaseAction.value && myPlayer.value?.canExchange &&
-           room.value.currentRound > 0 && room.value.currentRound < room.value.maxRounds;
+    // 내 턴이고, 교환 페이즈이고, 교환 기회가 남아있고, 아직 교환하지 않았을 때
+    return isMyTurn.value &&
+           !myPlayer.value?.folded &&
+           !myPlayer.value?.leaveReserved &&
+           room.value.status === 'playing' &&
+           room.value.currentPhase === 'exchange' &&
+           myPlayer.value?.canExchange === true && // ✅ 명시적으로 true 체크
+           room.value.currentExchangeOpportunityIndex > -1 &&
+           room.value.currentExchangeOpportunityIndex < room.value.maxExchangeOpportunities;
 });
 
 const canStay = computed(() => {
-    // 아침(0) 라운드에는 스테이 불가 (교환 라운드가 아니므로).
-    // currentRound는 1: 점심, 2: 저녁 라운드에서만 가능
-    return canExchangePhaseAction.value && myPlayer.value?.canExchange &&
-           room.value.currentRound > 0 && room.value.currentRound < room.value.maxRounds;
+    // 교환과 동일한 조건
+    return isMyTurn.value &&
+           !myPlayer.value?.folded &&
+           !myPlayer.value?.leaveReserved &&
+           room.value.status === 'playing' &&
+           room.value.currentPhase === 'exchange' &&
+           myPlayer.value?.canExchange === true && // ✅ 명시적으로 true 체크
+           room.value.currentExchangeOpportunityIndex > -1 &&
+           room.value.currentExchangeOpportunityIndex < room.value.maxExchangeOpportunities;
 });
 // --- 끝: 액션 버튼 활성화/비활성화 로직 ---
 
 const toggleCardSelection = (cardId) => {
-    // 자신의 턴에만 카드 선택 가능하고, 게임 중이고, 폴드하지 않았을 때만
-    // 중요: 'exchange' 페이즈에서만 카드 선택 가능
     if (!isMyTurn.value || room.value.status !== 'playing' || myPlayer.value?.folded || myPlayer.value?.leaveReserved ||
         room.value.currentPhase !== 'exchange') {
         logger.notify('지금은 카드를 선택할 수 없습니다. 카드 교환 페이즈에만 가능합니다.', 'warn');
         return;
     }
 
-    // 아침(0) 라운드에는 카드 교환 불가
-    // 저녁(2) 라운드까지만 교환 가능. 총 3 라운드(0, 1, 2)
-    if (room.value.currentRound === 0 || room.value.currentRound >= room.value.maxRounds) {
-        logger.notify('현재 라운드에는 카드를 교환할 수 없습니다.', 'warn');
+    if (room.value.currentExchangeOpportunityIndex === -1 || room.value.currentExchangeOpportunityIndex >= room.value.maxExchangeOpportunities) {
+        logger.notify('현재 라운드에는 카드를 교환할 수 없습니다. 교환 기회를 확인하세요.', 'warn');
         return;
     }
 
-    // 이미 교환 기회를 사용했다면 선택 불가
     if (!myPlayer.value?.canExchange) {
-        logger.notify('이번 라운드에 이미 카드를 교환했거나 스테이했습니다.', 'warn');
+        logger.notify('이번 교환 페이즈에 이미 카드를 교환했거나 스테이했습니다.', 'warn');
         return;
     }
 
     const index = selectedCardsIds.value.indexOf(cardId);
     if (index > -1) {
-        selectedCardsIds.value.splice(index, 1); // 선택 해제
+        selectedCardsIds.value.splice(index, 1);
     } else {
-        if (selectedCardsIds.value.length < 4) { // 로우바둑이 규칙: 최대 4장까지 선택 가능 (0장 교환도 가능)
-            selectedCardsIds.value.push(cardId); // 선택
+        if (selectedCardsIds.value.length < 4) {
+            selectedCardsIds.value.push(cardId);
         } else {
             logger.notify('카드는 최대 4장까지 선택할 수 있습니다.', 'warn');
         }
@@ -306,8 +453,17 @@ const toggleCardSelection = (cardId) => {
 };
 
 const isCardSelected = (cardId) => {
-    // cardId가 null일 경우 (빈 카드 슬롯) 선택될 수 없도록 처리
     return cardId !== null && selectedCardsIds.value.includes(cardId);
+};
+
+const getCardTitle = (card, isMyCard) => {
+    if (!card || card.suit === 'back' || card.rank === 'back') {
+        return 'Hidden Card';
+    }
+    if (roomStatus.value === 'showdown' || roomStatus.value === 'ended') {
+        return `${card.suit}${card.rank}`;
+    }
+    return isMyCard ? `${card.suit}${card.rank}` : 'Hidden Card';
 };
 
 const handleLeaveRoom = () => {
@@ -383,15 +539,18 @@ const startGame = () => {
 
 const getCardClass = (card, showFront = true, isSelected = false) => {
     const classes = ['card-face'];
-    // card가 null이거나, 뒷면 카드 더미 객체인 경우 (suit/rank가 'back'일 때)
-    if (!card || card.suit === 'back' || card.rank === 'back') {
-        // 이 경우에는 suit/rank 클래스를 추가하지 않고, img 태그로 뒷면 이미지를 보여줍니다.
-    } else if (shouldShowCardFace(card, showFront)) { // 앞면을 보여줄 카드인 경우
+    if (card === null) {
+        classes.push('card-empty-slot');
+        return classes;
+    }
+    if (card.suit === 'back' || card.rank === 'back') {
+        // img 태그로 뒷면 이미지를 보여주므로, 여기에 suit/rank 클래스 불필요
+    } else if (shouldShowCardFace(card, showFront)) {
         classes.push(`suit-${card.suit.toLowerCase()}`);
         const rankClass = card.rank === 'T' ? 't' : card.rank.toLowerCase();
         classes.push(`rank-${rankClass}`);
     } else {
-        // 이 경우도 뒷면을 보여주므로 suit/rank 클래스 불필요.
+        // img 태그로 뒷면 이미지를 보여주므로, 여기에 suit/rank 클래스 불필요
     }
 
     if (isSelected) {
@@ -404,28 +563,25 @@ const getPlayerCards = (playerId) => {
     if (playerId === myUserId.value) {
         const displayHand = [...myHand.value];
         while (displayHand.length < 4) {
-            displayHand.push(null); // 빈 카드 슬롯
+            displayHand.push(null);
         }
         return displayHand;
     } else {
-        // 다른 플레이어의 패는 항상 뒷면 카드 더미 객체로 반환
         return Array(4).fill(null).map((_, index) => ({ id: `back-${playerId}-${index}`, suit: 'back', rank: 'back' }));
     }
 };
 
 const shouldShowCardFace = (card, isMyCard) => {
-    // card가 null이면 무조건 뒷면 (또는 빈 슬롯)
     if (card === null) return false;
-    // 뒷면 카드 더미 객체인 경우 (suit/rank가 'back'일 때)
     if (card.suit === 'back' || card.rank === 'back') return false;
 
-    // 게임 종료 (showdown, ended) 상태일 때는 모든 카드 공개
     if (room.value.status === 'showdown' || room.value.status === 'ended') {
+        const playerFinalHand = finalHands.value[players.value.find(p => p.id === myUserId.value)?.id || ''];
+        if (isMyCard && playerFinalHand && playerFinalHand.some(fc => fc.id === card.id)) return true;
         return true;
     }
-    return isMyCard; // 게임 중에는 내 카드만 앞면
+    return isMyCard;
 };
-
 
 const handlePlayerAction = (actionType, payload = null) => {
     if (!isMyTurn.value) {
@@ -438,10 +594,9 @@ const handlePlayerAction = (actionType, payload = null) => {
         return;
     }
 
-    // 액션 타입별 라운드/페이즈 유효성 검사 강화
     const isBettingPhaseAction = (actionType === 'bet' || actionType === 'call' || actionType === 'raise' || actionType === 'check');
     const isExchangePhaseAction = (actionType === 'exchange' || actionType === 'stay');
-    const isCommonAction = (actionType === 'die'); // 'die'는 어느 페이즈에서든 가능
+    const isCommonAction = (actionType === 'die');
 
     if (room.value.currentPhase === 'betting' && !isBettingPhaseAction && !isCommonAction) {
         logger.notify('현재는 베팅 페이즈입니다. 베팅 관련 액션 또는 다이를 선택하세요.', 'warn');
@@ -451,41 +606,57 @@ const handlePlayerAction = (actionType, payload = null) => {
         logger.notify('현재는 카드 교환 페이즈입니다. 교환/스테이 또는 다이를 선택하세요.', 'warn');
         return;
     }
-    // '아침'(0) 라운드에는 카드 교환/스테이 불가 (현재 currentRound가 1:점심 부터 가능)
-    if (isExchangePhaseAction && room.value.currentRound === 0) {
-        logger.notify('아침 라운드에는 베팅만 가능합니다.', 'warn');
+    if (isExchangePhaseAction && (room.value.currentExchangeOpportunityIndex === -1 || room.value.currentExchangeOpportunityIndex >= room.value.maxExchangeOpportunities)) {
+        logger.notify('현재 라운드에는 카드 교환을 할 수 없습니다.', 'warn');
+        return;
+    }
+    if (myPlayer.value?.chips <= 0 && actionType !== 'die') {
+        logger.notify('칩이 부족하여 해당 액션을 할 수 없습니다. 다이하세요.', 'warn');
         return;
     }
 
-    let finalAmount = null; // 서버로 보낼 amount 값
-    let cardsToExchangeData = undefined; // 교환할 카드 정보
+    let finalAmount = null;
+    let cardsToExchangeData = undefined;
 
     switch (actionType) {
         case 'check':
-        case 'call':
-        case 'die':
-        case 'stay':
-            // 이 액션들은 amount가 필요 없거나 0입니다.
+            if (!canCheck.value) {
+                logger.notify('체크할 수 없습니다. 베팅 금액을 맞춰야 합니다.', 'warn');
+                return;
+            }
             finalAmount = 0;
             break;
-        case 'bet': // '삥'
+        case 'call':
+            if (!canCall.value) {
+                logger.notify('콜할 수 없습니다. 조건을 확인하세요.', 'warn');
+                return;
+            }
+            finalAmount = room.value.currentBet - (myPlayer.value?.currentRoundBet || 0);
+            break;
+        case 'die':
+        case 'stay':
+            finalAmount = 0;
+            break;
+        case 'bet':
             {
-                // '삥'은 항상 방의 기본 베팅액을 보냅니다.
-                finalAmount = room.value.betAmount;
-                if (finalAmount <= 0) {
-                    logger.notify('삥 금액을 정확히 계산할 수 없습니다.', 'error');
-                    return;
+                if (!canBbing.value) {
+                     logger.notify('현재 삥을 걸 수 없습니다. 조건을 확인하세요.', 'warn');
+                     return;
                 }
+                finalAmount = room.value.betAmount; // 삥은 방의 최소 베팅액으로
             }
             break;
         case 'raise':
             {
-                finalAmount = payload; // payload는 이미 총 베팅 금액
+                if (!canRaiseToHalf.value && !canRaiseToFull.value) { // 레이즈 자체가 불가능한 경우
+                    logger.notify('레이즈할 수 없습니다. 조건을 확인하세요.', 'warn');
+                    return;
+                }
+                finalAmount = payload;
                 if (typeof finalAmount !== 'number' || finalAmount <= 0) {
                     logger.notify('유효한 레이즈 금액을 입력해주세요.', 'warn');
                     return;
                 }
-                // 클라이언트 측 최소 레이즈 유효성 검사 (서버에서도 다시 검사)
                 const minRaiseTotal = getMinRaiseTotalAmount.value;
                 if (finalAmount < minRaiseTotal) {
                     logger.notify(`레이즈는 총 ${minRaiseTotal} 칩 이상으로 해야 합니다.`, 'warn');
@@ -495,7 +666,11 @@ const handlePlayerAction = (actionType, payload = null) => {
             break;
         case 'exchange':
             {
-                cardsToExchangeData = selectedCardsIds.value; // 선택된 카드 ID 목록
+                if (!canExchangeCards.value) {
+                    logger.notify('카드를 교환할 수 없습니다. 조건을 확인하세요.', 'warn');
+                    return;
+                }
+                cardsToExchangeData = selectedCardsIds.value;
                 if (!Array.isArray(cardsToExchangeData) || cardsToExchangeData.length < 0 || cardsToExchangeData.length > 4) {
                     logger.notify('교환할 카드는 0~4장만 선택해주세요.', 'warn');
                     return;
@@ -508,21 +683,21 @@ const handlePlayerAction = (actionType, payload = null) => {
     }
 
     logger.log(`[GameRoom] 플레이어 액션 전송: ${actionType}, Amount: ${finalAmount}, CardsToExchange:`, cardsToExchangeData);
+
     socket.emit('playerAction', {
         roomId: roomId.value,
         action: actionType,
-        amount: finalAmount, // 'bet', 'call', 'raise' 등에 사용
-        cardsToExchange: cardsToExchangeData // 'exchange'에 사용
+        amount: finalAmount,
+        cardsToExchange: cardsToExchangeData
     }, (response) => {
         if (response.success) {
             logger.log('[GameRoom] 액션 요청 성공:', actionType);
-            selectedCardsIds.value = []; // 액션 성공 시 선택된 카드 초기화
+            selectedCardsIds.value = [];
         } else {
             logger.notify('액션 실패: ' + (response.message || '알 수 없는 오류'), 'error');
         }
     });
 };
-
 
 const handleRoomUpdated = (updatedRoom) => {
     if (updatedRoom.id == roomId.value) {
@@ -533,17 +708,19 @@ const handleRoomUpdated = (updatedRoom) => {
         roomStatus.value = updatedRoom.status;
         roomCreatorId.value = updatedRoom.creatorId;
         currentTurnPlayerId.value = updatedRoom.currentTurnPlayerId;
-        currentBet.value = updatedRoom.currentBet; // 현재 최고 베팅액 업데이트
-        gameRound.value = updatedRoom.currentRound;
-        gameRoundName.value = updatedRoom.roomRoundName || updatedRoom.gameRoundName; // 서버에서 name으로 올 수도 있음
-        currentPhase.value = updatedRoom.currentPhase;
-        maxRounds.value = updatedRoom.maxRounds || 3; // maxRounds도 업데이트
+        currentBet.value = updatedRoom.currentBet;
+        pot.value = updatedRoom.pot;
 
-        // 자신의 패 정보는 'myHandUpdated' 이벤트로만 업데이트되도록 합니다.
-        // 다른 플레이어의 패 정보가 roomUpdated에 포함될 수 있으므로,
-        // 여기서는 myHand.value를 직접 업데이트하지 않습니다.
-        // 다만, 최초 로드 시 myHand가 없는 경우를 대비해 requestRoomInfo에서만 초기화합니다.
-        // selectedCardsIds.value = []; // 라운드/페이즈 변경 시 선택된 카드 초기화는 여기서는 하지 않음
+        currentBettingRoundIndex.value = updatedRoom.currentBettingRoundIndex;
+        currentExchangeOpportunityIndex.value = updatedRoom.currentExchangeOpportunityIndex;
+        gameRoundName.value = updatedRoom.gameRoundName;
+        currentPhase.value = updatedRoom.currentPhase;
+        maxBettingRounds.value = updatedRoom.maxBettingRounds || 4;
+        maxExchangeOpportunities.value = updatedRoom.maxExchangeOpportunities || 3;
+
+        dealerId.value = updatedRoom.dealerId;
+        smallBlindId.value = updatedRoom.smallBlindId;
+        bigBlindId.value = updatedRoom.bigBlindId;
     }
 };
 
@@ -552,32 +729,48 @@ socket.on('gameStarted', (data) => {
     roomStatus.value = data.room.status;
     players.value = data.room.players;
     currentTurnPlayerId.value = data.currentPlayerId;
-    myHand.value = data.myHand; // 자신의 패 정보 업데이트
-    currentBet.value = data.room.currentBet; // 시작 시 currentBet 업데이트
-    gameRound.value = data.room.currentRound;
-    gameRoundName.value = data.room.gameRoundName;
-    currentPhase.value = data.room.currentPhase;
-    maxRounds.value = data.room.maxRounds;
+    myHand.value = data.myHand;
+    currentBet.value = data.room.currentBet;
+    pot.value = data.room.pot;
+
+    currentBettingRoundIndex.value = data.currentBettingRoundIndex;
+    currentExchangeOpportunityIndex.value = data.currentExchangeOpportunityIndex;
+    gameRoundName.value = data.gameRoundName;
+    currentPhase.value = data.currentPhase;
+    maxBettingRounds.value = data.maxBettingRounds;
+    maxExchangeOpportunities.value = data.maxExchangeOpportunities;
+
+    dealerId.value = data.dealerId;
+    smallBlindId.value = data.smallBlindId;
+    bigBlindId.value = data.bigBlindId;
+
     logger.notify('게임이 시작되었습니다!', 'info');
     selectedCardsIds.value = [];
 });
 
 socket.on('roundStarted', (data) => {
     logger.log('[GameRoom] 라운드 시작 이벤트 수신:', data);
-    gameRound.value = data.currentRound;
+    currentBettingRoundIndex.value = data.currentBettingRoundIndex;
+    currentExchangeOpportunityIndex.value = data.currentExchangeOpportunityIndex;
     gameRoundName.value = data.gameRoundName;
     currentPhase.value = data.currentPhase;
-    currentBet.value = data.currentBet || room.value.betAmount; // 새 라운드의 기본 베팅액으로 currentBet 초기화
-    // 플레이어의 canExchange 상태는 GameService에서 초기화됩니다.
+    currentBet.value = data.currentBet;
+    pot.value = data.pot;
+
     logger.notify(`${data.gameRoundName} 라운드가 시작되었습니다!`, 'info');
     selectedCardsIds.value = [];
 });
 
-socket.on('phaseChanged', (data) => { // ✨ 새로운 페이즈 변경 이벤트 처리
+socket.on('phaseChanged', (data) => {
     logger.log('[GameRoom] 페이즈 변경 이벤트 수신:', data);
+    currentBettingRoundIndex.value = data.currentBettingRoundIndex;
+    currentExchangeOpportunityIndex.value = data.currentExchangeOpportunityIndex;
+    gameRoundName.value = data.gameRoundName;
     currentPhase.value = data.currentPhase;
-    currentBet.value = data.currentBet || room.value.betAmount;
-    logger.notify(data.message, 'info');
+    currentBet.value = data.currentBet;
+    pot.value = data.pot;
+
+    logger.notify(data.message || `현재 페이즈: ${displayCurrentPhase.value}`, 'info');
     selectedCardsIds.value = [];
 });
 
@@ -620,7 +813,7 @@ socket.on('gameEnded', (data) => {
 socket.on('forceLeaveRoom', (data) => {
   logger.warn(`[GameRoom] 서버로부터 강제 퇴장 요청: ${data.message}`);
   logger.notify(data.message || '방에서 강제 퇴장되었습니다.', 'warn');
-  router.replace('/lobby'); // 로비로 강제 이동
+  router.replace('/lobby');
 });
 
 
@@ -642,15 +835,21 @@ const requestRoomInfo = () => {
             roomStatus.value = response.room.status;
             roomCreatorId.value = response.room.creatorId;
             currentTurnPlayerId.value = response.room.currentTurnPlayerId;
-            currentBet.value = response.room.currentBet; // 초기 currentBet 설정
-            myHand.value = response.room.hands?.[myUserId.value] || [];
-            gameRound.value = response.room.currentRound;
+            currentBet.value = response.room.currentBet;
+            pot.value = response.room.pot;
+
+            currentBettingRoundIndex.value = response.room.currentBettingRoundIndex;
+            currentExchangeOpportunityIndex.value = response.room.currentExchangeOpportunityIndex;
             gameRoundName.value = response.room.gameRoundName;
             currentPhase.value = response.room.currentPhase;
-            maxRounds.value = response.room.maxRounds;
+            maxBettingRounds.value = response.room.maxBettingRounds || 4;
+            maxExchangeOpportunities.value = response.room.maxExchangeOpportunities || 3;
+
+            dealerId.value = response.room.dealerId;
+            smallBlindId.value = response.room.smallBlindId;
+            bigBlindId.value = response.room.bigBlindId;
 
             if (!response.room.players.some(p => p.id === myUserId.value) && response.room.status === 'waiting') {
-                // 현재 플레이어가 방에 없으면 입장 시도
                 socket.emit('joinRoom', { roomId: roomId.value, password: null }, (joinResponse) => {
                     if (!joinResponse.success) {
                         logger.notify('방 입장 실패: ' + joinResponse.message, 'error');
@@ -684,8 +883,7 @@ const handleBeforeUnload = (event) => {
 
 const closeGameEndedModal = () => {
     showGameEndedModal.value = false;
-    logger.log('[GameRoom] 게임 종료 모달 닫기 요청.');
-    // await router.replace('/lobby'); // ✨ await 키워드 추가
+    router.replace('/lobby');
 };
 
 onMounted(() => {
@@ -704,7 +902,7 @@ onMounted(() => {
     socket.on('roomUpdated', handleRoomUpdated);
     socket.on('gameStarted', (data) => { logger.log('[GameRoom] gameStarted 이벤트 수신', data); });
     socket.on('roundStarted', (data) => { logger.log('[GameRoom] roundStarted 이벤트 수신', data); });
-    socket.on('phaseChanged', (data) => { logger.log('[GameRoom] phaseChanged 이벤트 수신', data); }); // ✨ 새로운 이벤트 리스너 추가
+    socket.on('phaseChanged', (data) => { logger.log('[GameRoom] phaseChanged 이벤트 수신', data); });
     socket.on('turnChanged', (data) => { logger.log('[GameRoom] turnChanged 이벤트 수신', data); });
     socket.on('playerAction', (data) => { logger.log('[GameRoom] playerAction 이벤트 수신', data); });
     socket.on('myHandUpdated', (data) => { logger.log('[GameRoom] myHandUpdated 이벤트 수신', data); });
@@ -718,7 +916,7 @@ onMounted(() => {
         socket.off('roomUpdated', handleRoomUpdated);
         socket.off('gameStarted');
         socket.off('roundStarted');
-        socket.off('phaseChanged'); // ✨ 이벤트 리스너 해제
+        socket.off('phaseChanged');
         socket.off('turnChanged');
         socket.off('playerAction');
         socket.off('myHandUpdated');
@@ -726,6 +924,30 @@ onMounted(() => {
         socket.off('forceLeaveRoom');
     });
 });
+
+// ✅ 개발 모드에서만 활성화되는 디버그용 watch (필요시 주석 해제)
+// watch(() => ({
+//     phase: currentPhase.value,
+//     isMyTurn: isMyTurn.value,
+//     canExchange: myPlayer.value?.canExchange,
+//     folded: myPlayer.value?.folded,
+//     currentBet: currentBet.value,
+//     myCurrentRoundBet: myPlayer.value?.currentRoundBet,
+//     pot: pot.value,
+//     betAmount: betAmount.value,
+//     canCheck: canCheck.value,
+//     canCall: canCall.value,
+//     canBbing: canBbing.value,
+//     canRaiseToHalf: canRaiseToHalf.value,
+//     canRaiseToFull: canRaiseToFull.value,
+//     canDie: canDie.value,
+//     canExchangeCards: canExchangeCards.value,
+//     canStay: canStay.value,
+// }), (state) => {
+//     if (isMyTurn.value) { // 내 턴일 때만 로그
+//         console.log('[DEBUG-WATCH] 현재 상태 및 버튼 활성화:', state);
+//     }
+// }, { deep: true });
 </script>
 
 <style scoped>
@@ -740,10 +962,22 @@ onMounted(() => {
 }
 
 .text-center { text-align: center; }
+.mb-1 { margin-bottom: 0.25rem; }
+.mb-0 { margin-bottom: 0 !important; }
+.mt-2 { margin-top: 0.5rem; }
+.mt-3 { margin-top: 1rem; }
+.mt-4 { margin-top: 1.5rem; }
+.mb-3 { margin-bottom: 1rem; }
 .mb-4 { margin-bottom: 1.5rem; }
 .d-flex { display: flex; }
 .justify-content-center { justify-content: center; }
+.align-items-center { align-items: center; }
+.ml-1 { margin-left: 0.25rem; }
 .ml-2 { margin-left: 0.5rem; }
+.p-3 { padding: 1rem; }
+.rounded { border-radius: 0.25rem; }
+.border { border: 1px solid #dee2e6; }
+.bg-light { background-color: #f8f9fa; }
 
 .btn {
   padding: 0.75rem 1.25rem;
@@ -752,6 +986,7 @@ onMounted(() => {
   cursor: pointer;
   border: none;
   transition: background-color 0.2s ease;
+  white-space: nowrap;
 }
 .btn-success { background-color: #28a745; color: white; }
 .btn-success:hover { background-color: #218838; }
@@ -768,6 +1003,21 @@ onMounted(() => {
 .btn-light { background-color: #f8f9fa; color: #212529; border: 1px solid #ced4da; }
 .btn-light:hover { background-color: #e2e6ea; }
 
+.action-buttons-row button:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+}
+
+.room-info-summary {
+    background-color: #e9ecef;
+    border: 1px solid #dee2e6;
+    padding: 15px;
+    border-radius: 5px;
+    margin-bottom: 20px;
+}
+.room-info-summary p {
+    font-size: 0.95rem;
+}
 
 .player-list h4 {
     margin-bottom: 15px;
@@ -785,13 +1035,18 @@ onMounted(() => {
     margin-bottom: 5px;
     box-shadow: 0 1px 3px rgba(0,0,0,0.02);
 }
+.list-group-item.active-player-turn {
+    border-left: 5px solid #28a745;
+    background-color: #e6ffed;
+    box-shadow: 0 2px 8px rgba(40,167,69,0.2);
+}
 
 .player-hand {
     display: flex;
     gap: 5px;
     justify-content: center;
     margin-top: 10px;
-    min-height: 315px; /* 카드 이미지 높이만큼 최소 높이 지정 (빈 패일 때 공간 확보) */
+    min-height: 315px;
 }
 
 /* 최종 패 공개 시 왼쪽 정렬 */
@@ -804,7 +1059,7 @@ onMounted(() => {
     height: 315px;
     background-image: url('/cards/cards_sprite.png');
     background-repeat: no-repeat;
-    background-size: calc(225px * 13) calc(315px * 4); /* 원본 스프라이트 시트 크기 */
+    background-size: calc(225px * 13) calc(315px * 4);
     border: 1px solid #ccc;
     border-radius: 5px;
     box-shadow: 2px 2px 5px rgba(0,0,0,0.2);
@@ -824,13 +1079,14 @@ onMounted(() => {
 }
 /* 빈 카드 슬롯 스타일 */
 .card-empty-slot {
-    background-color: #f0f0f0; /* 빈 카드 슬롯 배경색 */
-    border: 1px dashed #ccc;   /* 빈 카드 슬롯 테두리 */
-    width: 225px; /* 실제 카드와 동일한 크기 */
+    background-color: #f0f0f0;
+    border: 1px dashed #ccc;
+    width: 225px;
     height: 315px;
     border-radius: 5px;
     display: inline-block;
     margin: 2px;
+    box-shadow: inset 0 0 5px rgba(0,0,0,0.1);
 }
 
 
@@ -878,6 +1134,9 @@ onMounted(() => {
 .badge-info { background-color: #17a2b8; }
 .badge-warning { background-color: #ffc107; color: #343a40; }
 .badge-success { background-color: #28a745; }
+.badge-danger { background-color: #dc3545; }
+.badge-dark { background-color: #343a40; }
+
 
 /* 게임 종료 모달 스타일 */
 .modal-overlay {
@@ -922,5 +1181,13 @@ onMounted(() => {
 }
 .modal-content .text-success {
     color: #28a745;
+}
+
+.alert-info {
+    background-color: #d1ecf1;
+    border-color: #bee5eb;
+    color: #0c5460;
+    border-radius: 0.3rem;
+    font-size: 0.9rem;
 }
 </style>

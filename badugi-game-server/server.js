@@ -100,7 +100,7 @@ function emitRoomsUpdate() {
     logDebug('[LOBBY] 방 목록이 업데이트되어 모든 클라이언트에게 전송되었습니다.');
 }
 
-// ✍️ 특정 방의 플레이어들에게 방 정보 업데이트 브로드캐스트 (비밀번호 제외)
+// ✍️ 특정 방의 플레이어들에게 방 정보 업데이트 브로드캐스트 (비밀번호 제외, 역할 정보 포함)
 function emitRoomUpdate(roomId) {
     const room = rooms[roomId];
     if (room) {
@@ -160,18 +160,21 @@ io.on('connection', (socket) => {
             isPrivate: !!roomData.password,
             players: [],
             status: 'waiting',
-            currentRound: 0,
+            currentBettingRoundIndex: 0,
+            currentExchangeOpportunityIndex: -1,
             pot: 0,
             currentBet: 0,
             activePlayers: [],
             lastBettingPlayer: null,
             turnIndex: 0,
-            dealerIndex: 0,
+            dealerIndex: -1, // ✨ 초기화 (startGame에서 설정)
+            smallBlindId: -1, // ✨ 초기화 (startGame에서 설정)
+            bigBlindId: -1, // ✨ 초기화 (startGame에서 설정)
             hands: {},
             discardPiles: {},
             currentTurnPlayerId: null,
-            gameRoundName: '대기 중', // 초기화
-            currentPhase: 'waiting' // 초기 페이즈
+            gameRoundName: '대기 중',
+            currentPhase: 'waiting'
         };
         rooms[newRoomId] = newRoom;
         logDebug(`[ROOM] 방 생성됨: ${newRoom.name} (ID: ${newRoom.id}) by User ${userName}, 비밀방: ${newRoom.isPrivate}`);
@@ -228,8 +231,8 @@ io.on('connection', (socket) => {
             folded: false,
             status: 'waiting',
             bestHand: null,
-            canExchange: true, // 초기화
-            hasActedInBettingRound: false, // 초기화
+            canExchange: false,
+            hasActedInBettingRound: false,
         };
         room.players.push(player);
         socket.join(`room-${roomIdToJoin}`);
@@ -263,7 +266,7 @@ io.on('connection', (socket) => {
             leavingPlayer.leaveReserved = true;
             logDebug(`[ROOM] User ${userName} (ID: ${userId})가 방 ${room.name} (ID: ${room.id})에서 퇴장을 예약했습니다.`);
             emitRoomUpdate(roomIdToLeave);
-            return callback({ success: false, message: '게임이 진행 중이므로 종료 후 나갈 수 있습니다.' });
+            return callback({ success: false, message: '게임이 진행 중이므로 종료 후 나갈 수 없습니다.' });
         }
 
         room.players.splice(playerIndex, 1);
@@ -282,6 +285,8 @@ io.on('connection', (socket) => {
                     logDebug(`[ROOM] 방 ${room.id}의 새로운 방장은 User ${room.players[0].name} (ID: ${room.players[0].id})으로 위임되었습니다.`);
                 }
             }
+            // 딜러/SB/BB 역할 업데이트 (나간 사람이 이 역할이었다면 재설정 필요)
+            // 게임 시작 시에만 설정되므로, 여기서는 단순히 ID를 재설정하지 않음. 다음 게임 시작 시 재설정됨.
         }
         emitRoomUpdate(roomIdToLeave);
         callback({ success: true });
@@ -317,7 +322,7 @@ io.on('connection', (socket) => {
             emitRoomUpdate(roomIdToCancel);
             callback({ success: true });
         } else {
-            callback({ success: false, message: '게임 중인 방에서 예약된 퇴장만 취소할 수 있습니다.' });
+            callback({ success: false, message: '게임 중인 방에서 예약된 퇴장만 취소할 수 없습니다.' });
         }
     });
 
@@ -342,7 +347,7 @@ io.on('connection', (socket) => {
         const gameStarted = gameService.startGame(roomIdToStart);
         if (gameStarted) {
             logDebug(`[ROOM] 방 ${room.name} (ID: ${room.id}) 게임 시작!`);
-            emitRoomUpdate(roomIdToStart); // 게임 시작 후 방 정보 업데이트
+            emitRoomUpdate(roomIdToStart); // 게임 시작 후 방 정보 업데이트 (딜러/SB/BB 정보 포함)
             callback({ success: true });
         } else {
             callback({ success: false, message: '게임 시작 중 오류가 발생했습니다.' });
@@ -356,8 +361,9 @@ io.on('connection', (socket) => {
         let result = { success: false, message: '알 수 없는 액션' };
 
         // 🚨 playerAction은 GameService에서 처리하고, 그 안에서 emitRoomUpdate를 호출합니다.
+        // 현재는 'fold'를 'die'와 동일하게 처리.
         switch (action) {
-            case 'fold': // '다이'와 동일하게 처리
+            case 'fold':
             case 'die':
                 result = gameService.handleBettingAction(actionRoomId, userId, 'die', 0); // 다이는 금액 없음
                 break;
@@ -417,6 +423,11 @@ io.on('connection', (socket) => {
                                 logDebug(`[ROOM] 방 ${room.id}의 새로운 방장은 User ${room.players[0].name} (ID: ${room.players[0].id})으로 위임되었습니다.`);
                             }
                         }
+                        // 딜러/SB/BB 역할도 업데이트 (나간 사람이 이 역할이었다면 재설정 필요)
+                        // 다음 게임 시작 시 재설정되도록 두거나, 즉시 재설정 로직 추가
+                        if (room.dealerId === loggedOutUserId) room.dealerId = -1;
+                        if (room.smallBlindId === loggedOutUserId) room.smallBlindId = -1;
+                        if (room.bigBlindId === loggedOutUserId) room.bigBlindId = -1;
                     }
                     emitRoomUpdate(roomId); // 방 정보 업데이트 브로드캐스트
                     roomUpdatedOccurred = true;
@@ -467,6 +478,10 @@ io.on('connection', (socket) => {
                                 logDebug(`[ROOM] 방 ${room.id}의 새로운 방장은 User ${room.players[0].name} (ID: ${room.players[0].id})으로 위임되었습니다. (연결 해제 후)`);
                             }
                         }
+                        // 딜러/SB/BB 역할도 업데이트 (나간 사람이 이 역할이었다면 재설정 필요)
+                        if (room.dealerId === userId) room.dealerId = -1;
+                        if (room.smallBlindId === userId) room.smallBlindId = -1;
+                        if (room.bigBlindId === userId) room.bigBlindId = -1;
                     }
                     emitRoomUpdate(roomId); // 방 정보 업데이트 브로드캐스트
                     roomUpdatedOccurred = true;

@@ -1,72 +1,76 @@
 <template>
-  <div class="lobby-page container">
-    <h1 class="text-center mb-4">로비</h1>
-    <p class="text-center">환영합니다, {{ userName }}님! 현재 보유 칩: {{ userChips }}</p>
+  <div class="lobby-page-wrapper container">
+    <h1 class="text-center">로비</h1>
+    <p class="text-center">환영합니다, <strong>{{ userName }}</strong>님! 현재 보유 칩: <strong>{{ userChips }}</strong></p>
+    <p class="text-center text-muted">({{ socketStatusMessage }})</p>
 
     <div class="d-flex justify-content-center mb-4">
         <button @click="createRoom" class="btn btn-success">새 방 만들기</button>
         <button @click="logout" class="btn btn-danger ml-2">로그아웃</button>
+        <button v-if="!isFullScreenSupported" class="btn btn-secondary ml-2" disabled>전체 화면 (지원 안됨)</button>
+        <button v-else @click="toggleFullScreen" :class="['btn', 'ml-2', isFullScreen ? 'btn-warning' : 'btn-info']">
+            {{ isFullScreen ? '전체 화면 종료' : '전체 화면 전환' }}
+        </button>
     </div>
 
-    <h3 class="mb-3">개설된 게임 방</h3>
-    <div v-if="!isSocketConnected" class="alert alert-warning text-center">
-        Socket.IO 서버에 연결 중입니다... 잠시만 기다려주세요.
-        <br>
-        <small>({{ socketStatusMessage }})</small>
-    </div>
-    <div v-else-if="rooms.length === 0" class="alert alert-info text-center">
+    <h2 class="text-center mb-3">개설된 게임 방</h2>
+
+    <div v-if="rooms.length === 0" class="alert alert-info text-center">
         현재 개설된 방이 없습니다. 새 방을 만들어보세요!
     </div>
-    <ul v-else class="list-group">
+    <ul v-else class="list-group room-list">
         <li v-for="room in rooms" :key="room.id" class="list-group-item d-flex justify-content-between align-items-center">
-            <div class="room-info">
-                <h5>{{ room.name }} <span v-if="room.isPrivate" class="badge badge-secondary ml-1">비밀방</span></h5>
-                <p>인원: {{ room.players }}/{{ room.maxPlayers }} | 베팅: {{ room.betAmount }} 칩</p>
-                <span :class="['badge', room.status === 'waiting' ? 'badge-primary' : (room.status === 'playing' ? 'badge-secondary' : room.status)]">
+            <div>
+                <strong>{{ room.name }}</strong>
+                <span v-if="room.isPrivate" class="badge badge-secondary ml-1">비밀방</span>
+                <br>
+                인원: {{ room.players }}/{{ room.maxPlayers }} | 베팅: {{ room.betAmount }} 칩
+                <span class="badge ml-1" :class="{'badge-info': room.status === 'waiting', 'badge-primary': room.status === 'playing'}">
                     {{ room.status === 'waiting' ? '대기 중' : (room.status === 'playing' ? '게임 중' : room.status) }}
                 </span>
             </div>
-            <!-- --- START MODIFICATION (handleJoinRoom 호출) --- -->
-            <button @click="handleJoinRoom(room)" :disabled="room.status !== 'waiting' || room.players >= room.maxPlayers" class="btn btn-primary">입장</button>
-            <!-- --- END MODIFICATION --- -->
+            <button @click="handleJoinRoom(room)" class="btn btn-primary" :disabled="room.status === 'playing' || room.players >= room.maxPlayers">입장</button>
         </li>
     </ul>
 
+    <!-- 새 게임 방 만들기 모달 -->
     <div v-if="showCreateRoomModal" class="modal-overlay">
-        <div class="modal-content">
-            <h4>새 게임 방 만들기</h4>
-            <div class="form-group">
-                <label for="roomName">방 제목:</label>
-                <input type="text" id="roomName" v-model="newRoom.name" class="form-control">
-            </div>
-            <div class="form-group">
-                <label for="betAmount">최소 베팅 칩:</label>
-                <input type="number" id="betAmount" v-model="newRoom.betAmount" class="form-control">
-            </div>
-            <div class="form-group">
-                <label for="roomPassword">비밀번호 (선택 사항):</label>
-                <input type="password" id="roomPassword" v-model="newRoom.password" class="form-control">
-            </div>
-            <button @click="submitCreateRoom" class="btn btn-success">생성</button>
-            <button @click="cancelCreateRoom" class="btn btn-secondary ml-2">취소</button>
+      <div class="modal-content">
+        <h4>새 게임 방 만들기</h4>
+        <div class="form-group">
+          <label for="roomName">방 제목:</label>
+          <input type="text" id="roomName" v-model="newRoom.name" class="form-control">
         </div>
+        <div class="form-group">
+          <label for="betAmount">최소 베팅 칩:</label>
+          <input type="number" id="betAmount" v-model.number="newRoom.betAmount" class="form-control" min="100" step="100">
+        </div>
+        <div class="form-group">
+          <label for="password">비밀번호 (선택 사항):</label>
+          <input type="password" id="password" v-model="newRoom.password" class="form-control">
+        </div>
+        <div class="d-flex justify-content-end mt-3">
+          <button @click="submitCreateRoom" class="btn btn-success">생성</button>
+          <button @click="cancelCreateRoom" class="btn btn-secondary ml-2">취소</button>
+        </div>
+      </div>
     </div>
 
-    <!-- --- START MODIFICATION (비밀방 입장용 비밀번호 입력 모달) --- -->
+    <!-- 비밀방 입장 비밀번호 모달 -->
     <div v-if="showPasswordModal" class="modal-overlay">
-        <div class="modal-content">
-            <h4>비밀방 입장</h4>
-            <p>"{{ selectedRoomName }}" 방에 입장하려면 비밀번호를 입력하세요.</p>
-            <div class="form-group">
-                <label for="joinPassword">비밀번호:</label>
-                <input type="password" id="joinPassword" v-model="joinPasswordInput" class="form-control" @keyup.enter="confirmJoinRoom">
-            </div>
-            <button @click="confirmJoinRoom" class="btn btn-primary">입장</button>
-            <button @click="cancelPasswordModal" class="btn btn-secondary ml-2">취소</button>
+      <div class="modal-content">
+        <h4>비밀방 입장</h4>
+        <p>"{{ selectedRoomName }}" 방에 입장하려면 비밀번호를 입력하세요.</p>
+        <div class="form-group">
+          <label for="joinPassword">비밀번호:</label>
+          <input type="password" id="joinPassword" v-model="joinPasswordInput" class="form-control">
         </div>
+        <div class="d-flex justify-content-end mt-3">
+          <button @click="confirmJoinRoom" class="btn btn-primary">입장</button>
+          <button @click="cancelPasswordModal" class="btn btn-secondary ml-2">취소</button>
+        </div>
+      </div>
     </div>
-    <!-- --- END MODIFICATION --- -->
-
   </div>
 </template>
 
@@ -94,12 +98,14 @@ const newRoom = ref({
 
 const socketStatusMessage = ref('초기화 중...');
 
-// --- START MODIFICATION (비밀방 입장 관련 상태 추가) ---
 const showPasswordModal = ref(false);
 const selectedRoomId = ref(null);
 const selectedRoomName = ref('');
 const joinPasswordInput = ref('');
-// --- END MODIFICATION ---
+
+// ✨ 전체 화면 관련 상태 및 기능 추가
+const isFullScreen = ref(false);
+const isFullScreenSupported = ref(false);
 
 const createRoom = () => {
   showCreateRoomModal.value = true;
@@ -153,17 +159,14 @@ const submitCreateRoom = () => {
   cancelCreateRoom();
 };
 
-// --- START MODIFICATION (handleJoinRoom 함수 추가) ---
 const handleJoinRoom = (room) => {
     if (room.isPrivate) {
-        // 비밀방인 경우 비밀번호 입력 모달 띄우기
         selectedRoomId.value = room.id;
         selectedRoomName.value = room.name;
-        joinPasswordInput.value = ''; // 비밀번호 입력 필드 초기화
+        joinPasswordInput.value = '';
         showPasswordModal.value = true;
     } else {
-        // 일반 방인 경우 바로 입장 시도
-        joinRoom(room.id, null); // 비밀번호 없이 입장
+        joinRoom(room.id, null);
     }
 };
 
@@ -182,8 +185,6 @@ const cancelPasswordModal = () => {
     selectedRoomName.value = '';
     joinPasswordInput.value = '';
 };
-// --- END MODIFICATION ---
-
 
 const joinRoom = (roomId, password = null) => {
     logger.log('[Lobby] 방 입장 요청:', roomId, '비밀번호 유무:', !!password);
@@ -263,7 +264,59 @@ const requestRoomsAndChips = () => {
     }
 };
 
+// ✨ 전체 화면 기능 토글
+const toggleFullScreen = () => {
+    if (!isFullScreenSupported.value) {
+        logger.notify('이 브라우저는 전체 화면 기능을 지원하지 않습니다.', 'warn');
+        return;
+    }
+
+    if (!document.fullscreenElement) {
+        document.documentElement.requestFullscreen()
+            .then(() => {
+                isFullScreen.value = true;
+                logger.log('전체 화면 전환 성공');
+            })
+            .catch(err => {
+                logger.error('전체 화면 전환 실패:', err);
+                logger.notify('전체 화면 전환에 실패했습니다.', 'error');
+            });
+    } else {
+        document.exitFullscreen()
+            .then(() => {
+                isFullScreen.value = false;
+                logger.log('전체 화면 종료 성공');
+            })
+            .catch(err => {
+                logger.error('전체 화면 종료 실패:', err);
+                logger.notify('전체 화면 종료에 실패했습니다.', 'error');
+            });
+    }
+};
+
+// ✨ 전체 화면 상태 변화 감지
+const handleFullscreenChange = () => {
+    isFullScreen.value = !!document.fullscreenElement;
+    logger.log('전체 화면 상태 변경 감지:', isFullScreen.value);
+};
+
+
 onMounted(() => {
+    // ✨ 전체 화면 지원 여부 확인
+    isFullScreenSupported.value = document.fullscreenEnabled;
+    if (isFullScreenSupported.value) {
+        document.addEventListener('fullscreenchange', handleFullscreenChange);
+        // .env 설정에 따라 로비 진입 시 전체 화면 전환 시도
+        if (import.meta.env.VITE_FULLSCREEN_MODE === 'true') {
+            // 사용자 제스처 없이 requestFullscreen 호출은 대부분 실패하므로,
+            // 별도의 버튼 클릭 등 사용자 상호작용 후에 호출하는 것이 좋습니다.
+            // 여기서는 일단 마운트 시도 (경고가 뜰 수 있음)
+            logger.warn('자동 전체 화면 전환은 브라우저 정책에 의해 차단될 수 있습니다. 버튼 클릭을 권장합니다.');
+            // toggleFullScreen(); // 이 부분은 사용자 상호작용 없이 호출될 경우 차단될 가능성이 높습니다.
+        }
+    }
+
+
     const unwatchIsConnected = watch(isSocketConnected, (newValue) => {
         logger.log('[Lobby] isSocketConnected watch 발동, newValue:', newValue);
         if (newValue === true) {
@@ -272,7 +325,7 @@ onMounted(() => {
             socketStatusMessage.value = 'Socket.IO 서버에 연결되었습니다.';
         } else {
             logger.warn('[Lobby] isSocketConnected가 false로 변경됨. Socket.IO 플러그인에서 리다이렉션 처리 예정.');
-            rooms.value = []; // 방 목록 초기화 (UI 비우기)
+            rooms.value = [];
             socketStatusMessage.value = 'Socket.IO 서버에 연결 중입니다...';
         }
     }, { immediate: true });
@@ -280,6 +333,9 @@ onMounted(() => {
     socket.on('roomsUpdated', handleRoomsUpdated);
 
     onUnmounted(() => {
+        if (isFullScreenSupported.value) {
+            document.removeEventListener('fullscreenchange', handleFullscreenChange);
+        }
         unwatchIsConnected();
         socket.off('roomsUpdated', handleRoomsUpdated);
         socket.off('connect');
@@ -297,18 +353,20 @@ watch(rooms, (newRooms) => {
 </script>
 
 <style scoped>
-.lobby-page {
+.lobby-page-wrapper {
   max-width: 900px;
-  margin: 50px auto;
+  margin: 20px auto;
   padding: 20px;
   border: 1px solid #e0e0e0;
   border-radius: 8px;
   box-shadow: 0 4px 12px rgba(0,0,0,0.05);
   background-color: #f8f9fa;
 }
+
 .text-center { text-align: center; }
 .mb-4 { margin-bottom: 1.5rem; }
 .mb-3 { margin-bottom: 1rem; }
+.ml-1 { margin-left: 0.25rem; }
 .ml-2 { margin-left: 0.5rem; }
 .d-flex { display: flex; }
 .justify-content-center { justify-content: center; }
@@ -329,41 +387,46 @@ watch(rooms, (newRooms) => {
 .btn-primary:hover { background-color: #0056b3; }
 .btn-secondary { background-color: #6c757d; color: white; }
 .btn-secondary:hover { background-color: #5a6268; }
+.btn-info { background-color: #17a2b8; color: white; }
+.btn-info:hover { background-color: #117a8b; }
+.btn-warning { background-color: #ffc107; color: #343a40; }
+.btn-warning:hover { background-color: #e0a800; }
 
 
-.list-group {
-  list-style: none;
-  padding: 0;
-}
-.list-group-item {
-  background-color: white;
-  border: 1px solid #e0e0e0;
-  border-radius: 0.3rem;
-  padding: 1rem 1.5rem;
-  margin-bottom: 10px;
-  box-shadow: 0 2px 4px rgba(0,0,0,0.03);
-}
-.room-info h5 {
-  margin-bottom: 0.25rem;
-  font-size: 1.25rem;
-  color: #343a40;
-}
-.room-info p {
-  margin-bottom: 0.5rem;
-  color: #6c757d;
-}
-.badge {
-  padding: 0.4em 0.6em;
+.alert {
+  padding: 1rem;
+  margin-top: 1rem;
   border-radius: 0.25rem;
-  font-size: 0.75em;
-  font-weight: bold;
-  color: white;
 }
-.badge-primary { background-color: #007bff; }
-.badge-secondary { background-color: #6c757d; }
-.badge-info { background-color: #17a2b8; }
-.badge-warning { background-color: #ffc107; color: #343a40; }
+.alert-info {
+  color: #0c5460;
+  background-color: #d1ecf1;
+  border-color: #bee5eb;
+}
 
+.room-list {
+    list-style: none;
+    padding: 0;
+}
+.room-list .list-group-item {
+    background-color: white;
+    border: 1px solid #e0e0e0;
+    border-radius: 0.3rem;
+    padding: 0.75rem 1rem;
+    margin-bottom: 8px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.02);
+}
+.room-list .list-group-item .badge {
+    font-size: 0.7em;
+    vertical-align: middle;
+    margin-top: -3px;
+}
+.room-list .list-group-item .btn {
+    padding: 0.5rem 1rem;
+    font-size: 0.85rem;
+}
+
+/* Modal styles */
 .modal-overlay {
     position: fixed;
     top: 0;
@@ -383,33 +446,40 @@ watch(rooms, (newRooms) => {
     border-radius: 10px;
     box-shadow: 0 5px 20px rgba(0, 0, 0, 0.4);
     width: 400px;
-    text-align: center;
+    text-align: left;
 }
+
 .modal-content h4 {
     margin-bottom: 20px;
     color: #343a40;
     font-size: 1.5rem;
+    text-align: center;
 }
-.modal-content p {
-    margin-bottom: 15px;
-    color: #555;
-}
+
 .form-group {
-    margin-bottom: 20px;
-    text-align: left;
+    margin-bottom: 15px;
 }
+
 .form-group label {
     display: block;
-    margin-bottom: 8px;
+    margin-bottom: 5px;
     font-weight: bold;
-    color: #495057;
+    color: #555;
 }
+
 .form-control {
     width: 100%;
-    padding: 12px;
+    padding: 8px 12px;
     border: 1px solid #ced4da;
-    border-radius: 5px;
+    border-radius: 4px;
     box-sizing: border-box;
-    font-size: 1rem;
+}
+
+.mt-3 {
+    margin-top: 1rem;
+}
+
+.justify-content-end {
+    justify-content: flex-end;
 }
 </style>

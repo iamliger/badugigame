@@ -20,24 +20,24 @@ const server = createServer(app);
 const DEBUG_MODE = process.env.DEBUG === 'true';
 
 // ✍️ 로깅 함수 정의 (서버 전역에서 사용, GameService에서도 import하여 사용)
-export function logDebug(...args) { // export하여 GameService에서도 임포트 가능하도록
+export function logDebug(...args) {
     if (DEBUG_MODE) {
         console.log('[SERVER-DEBUG]', ...args);
     }
 }
-export function warnDebug(...args) { // export하여 GameService에서도 임포트 가능하도록
+export function warnDebug(...args) {
     if (DEBUG_MODE) {
         console.warn('[SERVER-WARN]', ...args);
     }
 }
-export function errorDebug(...args) { // export하여 GameService에서도 임포트 가능하도록
+export function errorDebug(...args) {
     console.error('[SERVER-ERROR]', ...args);
 }
-
 
 const PORT = process.env.PORT || 3000;
 const CORS_ORIGIN = process.env.CORS_ORIGIN ? process.env.CORS_ORIGIN.split(',') : ['http://localhost:8000', 'http://127.0.0.1:8000', 'http://localhost:5173'];
 const JWT_SECRET = process.env.JWT_SECRET;
+const TURN_TIME_LIMIT = parseInt(process.env.TURN_TIME_LIMIT || '30');
 
 app.use(cors({ origin: CORS_ORIGIN, credentials: true }));
 
@@ -69,23 +69,21 @@ io.use((socket, next) => {
     } catch (err) {
         errorDebug(`[AUTH] Socket ID: ${socket.id}, 인증 실패 - ${err.message}`);
         if (err.name === 'TokenExpiredError') {
-            return next(new Error('Authentication error: Token expired. Please re-login.'), { message: 'Authentication error: Token expired. Please re-login.' });
+            return next(new Error('Authentication error: Token expired. Please re-login.'), { message: 'Authentication error: Token expired: Please re-login.' });
         }
         return next(new Error('Authentication error: Invalid token'));
     }
 });
 
-
 // --- 🎮 게임 로직 관련 임시 데이터 저장소 ---
 const rooms = {};
 let roomIdCounter = 1;
 
-// 🎮 GameService 인스턴스 생성 및 초기화
-const gameService = new GameService(io, rooms);
+// 🎮 GameService 인스턴스 생성 및 초기화 (TURN_TIME_LIMIT 전달)
+const gameService = new GameService(io, rooms, TURN_TIME_LIMIT);
 // --- 🎮 게임 로직 관련 임시 데이터 저장소 끝 ---
 
-
-// ✍️ 모든 클라이언트에게 방 목록 업데이트 브로드캐스트 (비밀번호 제외)
+// ✍️ 모든 클라이언트에게 방 목록 업데이트 브로드캐스트
 function emitRoomsUpdate() {
     const publicRooms = Object.values(rooms).map(room => ({
         id: room.id,
@@ -112,12 +110,10 @@ function emitRoomUpdate(roomId) {
     }
 }
 
-
 // 🌐 HTTP 루트 경로
 app.get('/', (req, res) => {
     res.send('<h1>바둑이 게임 서버가 실행 중입니다.</h1>');
 });
-
 
 // ⚡️ Socket.IO 연결 이벤트 핸들러
 io.on('connection', (socket) => {
@@ -166,11 +162,15 @@ io.on('connection', (socket) => {
             currentBet: 0,
             activePlayers: [],
             lastBettingPlayer: null,
+            lastActionPlayerId: null,
             turnIndex: 0,
+            turnIndexAtRoundStart: null,
             dealerIndex: 0,
             dealerId: -1,
             smallBlindId: -1,
             bigBlindId: -1,
+            timerProcessingLock: false,
+            isBettingStartedThisRound: false, // ✨ NEW: 이 라운드에서 베팅이 시작되었는지 여부 플래그
             hands: {},
             discardPiles: {},
             currentTurnPlayerId: null,
@@ -188,7 +188,7 @@ io.on('connection', (socket) => {
     });
 
     // 📩 클라이언트로부터 'joinRoom' 이벤트 받으면 방 입장
-    socket.on('joinRoom', (data, callback) => { // data 객체로 roomId와 password를 받음
+    socket.on('joinRoom', (data, callback) => {
         const roomIdToJoin = data.roomId;
         const password = data.password;
 
@@ -224,7 +224,7 @@ io.on('connection', (socket) => {
         const player = {
             id: userId,
             name: userName,
-            chips: 10000,
+            chips: 1000, // TODO: 실제 DB에서 칩 로드 (라라벨 연동)
             socketId: socket.id,
             isCreator: room.creatorId === userId,
             leaveReserved: false,
@@ -258,11 +258,9 @@ io.on('connection', (socket) => {
 
         const leavingPlayer = room.players[playerIndex];
 
-        // 대기 중인 방에서 방장이 나갈 때, 다른 플레이어가 있으면 못 나가게 함 (강제 종료 방지)
         if (room.creatorId === userId && room.players.length > 1 && room.status === 'waiting') {
             return callback({ success: false, message: '다른 플레이어가 있는 대기 중인 방장은 나갈 수 없습니다. 방을 삭제하려면 모든 플레이어가 나가야 합니다.' });
         }
-        // 게임 진행 중일 경우 바로 나가지 못하고 퇴장 예약
         if (room.status === 'playing') {
             leavingPlayer.leaveReserved = true;
             logDebug(`[ROOM] User ${userName} (ID: ${userId})가 방 ${room.name} (ID: ${room.id})에서 퇴장을 예약했습니다.`);
@@ -278,7 +276,6 @@ io.on('connection', (socket) => {
             delete rooms[roomIdToLeave];
             logDebug(`[ROOM] 방 ${room.name} (ID: ${room.id})이(가) 삭제되었습니다.`);
         } else {
-            // 나간 사람이 방장이었다면 새로운 방장 위임
             if (room.creatorId === userId) {
                 if (room.players.length > 0) {
                     room.creatorId = room.players[0].id;
@@ -302,7 +299,7 @@ io.on('connection', (socket) => {
             player.leaveReserved = true;
             logDebug(`[ROOM] User ${userName} (ID: ${userId})가 방 ${room.name} (ID: ${room.id})에서 퇴장을 예약했습니다.`);
             emitRoomUpdate(roomIdToReserve);
-            return callback({ success: false, message: '게임 중인 방에서만 퇴장 예약이 가능합니다.' });
+            callback({ success: true });
         } else {
             callback({ success: false, message: '게임 중인 방에서만 퇴장 예약이 가능합니다.' });
         }
@@ -319,12 +316,11 @@ io.on('connection', (socket) => {
             player.leaveReserved = false;
             logDebug(`[ROOM] User ${userName} (ID: ${userId})가 방 ${room.name} (ID: ${room.id})에서 퇴장 예약을 취소했습니다.`);
             emitRoomUpdate(roomIdToCancel);
-            return callback({ success: true });
+            callback({ success: true });
         } else {
             callback({ success: false, message: '게임 중인 방에서 예약된 퇴장만 취소할 수 없습니다.' });
         }
     });
-
 
     // 📩 클라이언트로부터 'startGame' 이벤트 받으면 게임 시작 처리
     socket.on('startGame', (roomIdToStart, callback) => {
@@ -359,20 +355,14 @@ io.on('connection', (socket) => {
 
         let result = { success: false, message: '알 수 없는 액션' };
 
-        // 🚨 playerAction은 GameService에서 처리하고, 그 안에서 emitRoomUpdate를 호출합니다.
         switch (action) {
-            case 'fold':
-            case 'die':
-                result = gameService.handleBettingAction(actionRoomId, userId, 'die', 0); // 다이는 금액 없음
-                break;
             case 'check':
             case 'call':
-            case 'bet': // '삥' 액션
+            case 'bet':
             case 'raise':
-                result = gameService.handleBettingAction(actionRoomId, userId, action, amount);
-                break;
+            case 'die':
             case 'stay':
-                result = gameService.handleCardExchange(actionRoomId, userId, []); // 0장 교환은 스테이와 동일
+                result = gameService.handleBettingAction(actionRoomId, userId, action, amount);
                 break;
             case 'exchange':
                 result = gameService.handleCardExchange(actionRoomId, userId, cardsToExchange);
@@ -393,7 +383,6 @@ io.on('connection', (socket) => {
         }
     });
 
-
     // 📩 클라이언트에서 JWT 만료 시 보내는 로그아웃 이벤트 처리
     socket.on('userLoggedOut', (data) => {
         const loggedOutUserId = data.userId;
@@ -410,10 +399,9 @@ io.on('connection', (socket) => {
                     logDebug(`[ROOM] User ${userName} (ID: ${loggedOutUserId})가 방 ${room.name} (ID: ${room.id})에서 제거되었습니다.`);
 
                     if (room.players.length === 0) {
-                        delete rooms[roomId]; // 방 삭제
+                        delete rooms[roomId];
                         logDebug(`[ROOM] 방 ${room.name} (ID: ${room.id})이(가) 삭제되었습니다.`);
                     } else {
-                        // 방장이 나간 후 남은 플레이어가 있다면 새로운 방장 위임
                         if (room.creatorId === loggedOutUserId) {
                             if (room.players.length > 0) {
                                 room.creatorId = room.players[0].id;
@@ -422,13 +410,13 @@ io.on('connection', (socket) => {
                             }
                         }
                     }
-                    emitRoomUpdate(roomId); // 방 정보 업데이트 브로드캐스트
+                    emitRoomUpdate(roomId);
                     roomUpdatedOccurred = true;
                 }
             }
 
             if (roomUpdatedOccurred) {
-                emitRoomsUpdate(); // 모든 로비 클라이언트에게 방 목록 업데이트 알림 (핵심 수정)
+                emitRoomsUpdate();
             }
 
             socket.disconnect(true);
@@ -444,41 +432,40 @@ io.on('connection', (socket) => {
         let roomUpdatedOccurred = false;
         for (const roomId in rooms) {
             const room = rooms[roomId];
-            const playerIndex = room.players.findIndex(p => p.socketId === socket.id); // 소켓 ID로 플레이어 찾기
+            const playerIndex = room.players.findIndex(p => p.socketId === socket.id);
 
             if (playerIndex > -1) {
                 const disconnectedPlayer = room.players[playerIndex];
 
                 if (room.status === 'playing' && !disconnectedPlayer.leaveReserved) {
-                    // 게임 중 연결 해제 시 즉시 제거 대신 퇴장 예약
                     disconnectedPlayer.leaveReserved = true;
                     logDebug(`[ROOM] User ${userName} (ID: ${userId}) (소켓 ${socket.id})가 연결 해제로 인해 게임 중 퇴장 예약되었습니다.`);
                     emitRoomUpdate(roomId);
                     roomUpdatedOccurred = true;
                 } else {
-                    room.players.splice(playerIndex, 1); // 플레이어 제거
+                    room.players.splice(playerIndex, 1);
                     socket.leave(`room-${roomId}`);
                     logDebug(`[ROOM] User ${userName} (ID: ${userId}) (소켓 ${socket.id})가 방 ${room.name} (ID: ${room.id})에서 나갔습니다.`);
 
                     if (room.players.length === 0) {
-                        delete rooms[roomId]; // 방 삭제 (유령방 방지)
+                        delete rooms[roomId];
                         logDebug(`[ROOM] 방 ${room.name} (ID: ${room.id})이(가) 삭제되었습니다.`);
                     } else {
-                        if (room.creatorId === userId) { // 나간 사람이 방장이었다면
+                        if (room.creatorId === userId) {
                             if (room.players.length > 0) {
-                                room.creatorId = room.players[0].id; // 새 방장 위임
+                                room.creatorId = room.players[0].id;
                                 room.players[0].isCreator = true;
                                 logDebug(`[ROOM] 방 ${room.id}의 새로운 방장은 User ${room.players[0].name} (ID: ${room.players[0].id})으로 위임되었습니다. (연결 해제 후)`);
                             }
                         }
                     }
-                    emitRoomUpdate(roomId); // 방 정보 업데이트 브로드캐스트
+                    emitRoomUpdate(roomId);
                     roomUpdatedOccurred = true;
                 }
             }
         }
         if (roomUpdatedOccurred) {
-            emitRoomsUpdate(); // 모든 로비 클라이언트에게 방 목록 업데이트 알림 (유령방 방지 효과)
+            emitRoomsUpdate();
         }
     });
 });
@@ -488,6 +475,7 @@ server.listen(PORT, () => {
     logDebug(`바둑이 게임 서버가 http://localhost:${PORT} 에서 실행 중입니다.`);
     logDebug(`CORS 허용 Origin: ${CORS_ORIGIN.join(', ')}`);
     logDebug(`JWT Secret 로드됨: ${JWT_SECRET ? 'Yes' : 'No'}`);
+    logDebug(`턴 시간 제한 (TURN_TIME_LIMIT): ${TURN_TIME_LIMIT}초`);
     if (!JWT_SECRET) {
         errorDebug('경고: JWT_SECRET이 설정되지 않았습니다. .env 파일을 확인해주세요!');
     }

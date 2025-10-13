@@ -90,7 +90,7 @@
             <!-- 교환 페이즈 버튼 - canExchange가 true일 때만 표시 -->
             <template v-else-if="currentPhase === 'exchange' && myPlayer?.canExchange">
                 <button @click="handlePlayerAction('exchange', selectedCardsIds)" class="btn btn-warning ml-2" :disabled="!canExchangeCards">카드 교환 ({{ selectedCardsIds.length }}장)</button>
-                <button @click="handlePlayerAction('stay')" class="btn btn-light ml-2" :disabled="!canStay">스테이</button>
+                <button @click="handlePlayerAction('stay', [])" class="btn btn-light ml-2" :disabled="!canStay">스테이</button> <!-- ✨ FIX: 스테이 시 빈 배열을 payload로 전달 -->
             </template>
 
             <!-- 교환 페이즈지만 이미 액션한 경우 대기 메시지 -->
@@ -762,7 +762,9 @@ const handlePlayerAction = (actionType, payload = null) => {
             finalAmount = 0;
             break;
         case 'stay':
-            finalAmount = 0;
+            // ✨ FIX: 스테이 액션은 카드 교환과 동일하게 `cardsToExchangeData`에 빈 배열을 설정
+            cardsToExchangeData = []; // 빈 배열은 카드 교환 0장을 의미하며, 서버에서 스테이로 처리
+            finalAmount = 0; // 스테이는 금액 지불 없음
             break;
         case 'bet': // '삥'
             {

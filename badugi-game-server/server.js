@@ -221,10 +221,12 @@ io.on('connection', (socket) => {
             return callback({ success: true, room: sanitizedRoom });
         }
 
+        const playerInitialChips = data.initialChips || 100000; // 클라이언트에서 넘겨받거나 기본값
+
         const player = {
             id: userId,
             name: userName,
-            chips: 1000, // TODO: 실제 DB에서 칩 로드 (라라벨 연동)
+            chips: playerInitialChips, // TODO: 실제 DB에서 칩 로드 (라라벨 연동)
             socketId: socket.id,
             isCreator: room.creatorId === userId,
             leaveReserved: false,
@@ -361,10 +363,10 @@ io.on('connection', (socket) => {
             case 'bet':
             case 'raise':
             case 'die':
-            case 'stay':
                 result = gameService.handleBettingAction(actionRoomId, userId, action, amount);
                 break;
             case 'exchange':
+            case 'stay': // ✨ FIX: 'stay' 액션을 handleCardExchange로 라우팅
                 result = gameService.handleCardExchange(actionRoomId, userId, cardsToExchange);
                 break;
             default:

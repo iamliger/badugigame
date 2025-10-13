@@ -86,7 +86,7 @@ const socket = inject('socket');
 const isSocketConnected = inject('isSocketConnected');
 
 const userName = ref(localStorage.getItem('user_name') || '게스트');
-const userChips = ref(0);
+const userChips = ref(localStorage.getItem('user_chips') ? parseInt(localStorage.getItem('user_chips')) : 0); // 초기화 시 parseInt 처리
 
 const rooms = ref([]);
 const showCreateRoomModal = ref(false);
@@ -193,13 +193,17 @@ const cancelPasswordModal = () => {
 
 
 const joinRoom = (roomId, password = null) => {
-    logger.log('[Lobby] 방 입장 요청:', roomId, '비밀번호 유무:', !!password);
+    logger.log('[Lobby] 방 입장 요청:', roomId, '비밀번호 유무:', !!password, '내 칩:', userChips.value);
     if (!isSocketConnected.value) {
         logger.notify('Socket.IO 연결이 끊어졌습니다. 방에 입장할 수 없습니다. 다시 로그인해주세요.', 'error');
         return;
     }
 
-    socket.emit('joinRoom', { roomId: roomId, password: password }, (response) => {
+    socket.emit('joinRoom', {
+        roomId: roomId,
+        password: password,
+        initialChips: userChips.value // ✨ MODIFIED: 사용자 칩 정보를 서버로 전달
+    }, (response) => {
         if (response.success) {
             logger.log('[Lobby] 방 입장 성공:', response.room);
             router.push(`/room/${response.room.id}`);

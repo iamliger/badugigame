@@ -97,7 +97,8 @@ const newRoom = ref({
   password: '',
 });
 
-const socketStatusMessage = ref('초기화 중...');
+// ✨ FIX: socketStatusMessage의 초기값을 isSocketConnected에 따라 설정
+const socketStatusMessage = ref(isSocketConnected.value ? 'Socket.IO 서버에 연결되었습니다.' : 'Socket.IO 서버에 연결 중입니다...');
 
 // --- START MODIFICATION (비밀방 입장 관련 상태 추가) ---
 const showPasswordModal = ref(false);
@@ -275,20 +276,26 @@ const requestRoomsAndChips = () => {
 };
 
 onMounted(() => {
-    const unwatchIsConnected = watch(isSocketConnected, (newValue) => {
+  const unwatchIsConnected = watch(isSocketConnected, (newValue) => {
         logger.log('[Lobby] isSocketConnected watch 발동, newValue:', newValue);
         if (newValue === true) {
             logger.log('[Lobby] isSocketConnected가 true로 변경됨, 방 목록 및 칩 요청.');
             requestRoomsAndChips();
-            socketStatusMessage.value = 'Socket.IO 서버에 연결되었습니다.';
+            socketStatusMessage.value = 'Socket.IO 서버에 연결되었습니다.'; // ✨ 재연결 성공 시 메시지 업데이트
         } else {
             logger.warn('[Lobby] isSocketConnected가 false로 변경됨. Socket.IO 플러그인에서 리다이렉션 처리 예정.');
             rooms.value = []; // 방 목록 초기화 (UI 비우기)
-            socketStatusMessage.value = 'Socket.IO 서버에 연결 중입니다...';
+            socketStatusMessage.value = 'Socket.IO 서버에 연결 중입니다...'; // ✨ 연결 끊김 시 메시지 업데이트
+            const token = localStorage.getItem('jwt_token');
+            if (token && !socket.connected) {
+                logger.log('[Lobby] 토큰 존재하지만 연결 끊김, Socket.IO 재연결 시도 중...');
+                socket.connect(); // 재연결 시도
+            }
         }
     }, { immediate: true });
 
     socket.on('roomsUpdated', handleRoomsUpdated);
+
 
     onUnmounted(() => {
         unwatchIsConnected();

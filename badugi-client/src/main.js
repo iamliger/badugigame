@@ -1,6 +1,7 @@
 // badugi-client/src/main.js
-import './assets/main.css'
+//import './assets/main.css'
 import './assets/cards.css' // cards.css 임포트
+// import './assets/auth-forms.css' // ✨ NEW: 공통 인증 폼 CSS 임포트
 
 import { createApp } from 'vue'
 import { createPinia } from 'pinia'

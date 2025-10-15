@@ -30,8 +30,16 @@ class AdminPanelProvider extends PanelProvider
             ->colors([
                 'primary' => Color::Amber,
             ])
-            ->discoverResources(in: app_path('Filament/Resources'), for: 'App\\Filament\\Resources')
-            ->discoverPages(in: app_path('Filament/Pages'), for: 'App\\Filament\\Pages')
+            // ✨ FIX: discoverResources() 대신 resources()를 사용하거나, 다른 리소스가 없으면 비워둡니다.
+            //        RobotResource를 삭제했으므로, 이 배열에 RobotResource를 포함하지 않습니다.
+            // ->discoverResources(in: app_path('Filament/Resources'), for: 'App\\Filament\\Resources') // 이 라인을 주석 처리하거나 삭제합니다.
+            ->resources([
+                // 만약 App\Filament\Resources 폴더에 다른 유효한 리소스(예: UserResource)가 있다면
+                // App\Filament\Resources\UserResource::class,
+                // 과 같이 여기에 직접 등록해야 합니다.
+                // 현재 RobotResource를 삭제했으므로, 다른 리소스가 없다면 이 배열은 비워둡니다.
+            ])
+            ->discoverPages(in: app_path('Filament/Pages'), for: 'App\\Filament\\Pages') // Custom Page는 discoverPages로 발견
             ->pages([
                 Pages\Dashboard::class,
             ])
@@ -41,13 +49,13 @@ class AdminPanelProvider extends PanelProvider
                 Widgets\FilamentInfoWidget::class,
             ])
             ->middleware([
+                StartSession::class,
                 EncryptCookies::class,
                 AddQueuedCookiesToResponse::class,
-                StartSession::class,
                 AuthenticateSession::class,
                 ShareErrorsFromSession::class,
-                VerifyCsrfToken::class,
                 SubstituteBindings::class,
+                VerifyCsrfToken::class,
                 DisableBladeIconComponents::class,
                 DispatchServingFilamentEvent::class,
             ])

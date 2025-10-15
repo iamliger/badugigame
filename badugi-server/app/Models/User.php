@@ -34,6 +34,13 @@ class User extends Authenticatable implements FilamentUser, JWTSubject
 
     // protected $appends = ['points'];
 
+    public function defaultAbilities(): array
+    {
+        return [
+            'robot:control' // ✨ NEW: 로봇 제어 권한 스코프 정의
+        ];
+    }
+
     // FilamentUser 인터페이스를 구현하기 위한 메서드 추가 (자동으로 추가되었을 것입니다)
     public function canAccessFilament(): bool
     {

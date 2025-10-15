@@ -1,5 +1,5 @@
 // badugi-game-server/server.js
-
+import RobotController from './src/controllers/RobotController.js';
 // 📦 ESM 방식으로 모듈 임포트
 import dotenv from 'dotenv';
 import express from 'express';
@@ -38,8 +38,21 @@ const PORT = process.env.PORT || 3000;
 const CORS_ORIGIN = process.env.CORS_ORIGIN ? process.env.CORS_ORIGIN.split(',') : ['http://localhost:8000', 'http://127.0.0.1:8000', 'http://localhost:5173'];
 const JWT_SECRET = process.env.JWT_SECRET;
 const TURN_TIME_LIMIT = parseInt(process.env.TURN_TIME_LIMIT || '30');
+const GAME_SERVER_API_SECRET = process.env.GAME_SERVER_API_SECRET; // ✨ NEW: .env에서 API Secret 로드
 
 app.use(cors({ origin: CORS_ORIGIN, credentials: true }));
+app.use(express.json()); // ✨ NEW: JSON 요청 바디 파싱을 위해 추가
+
+// ✨ NEW: 게임 서버 API Secret 검증 미들웨어
+const authenticateGameServerApi = (req, res, next) => {
+    const secret = req.header('X-Game-Server-API-Secret');
+    if (!GAME_SERVER_API_SECRET || secret === GAME_SERVER_API_SECRET) {
+        next();
+    } else {
+        errorDebug(`[API-AUTH] 잘못된 API Secret 접근 시도: ${req.ip}`);
+        return res.status(401).json({ message: 'Unauthorized: Invalid API Secret' });
+    }
+};
 
 const io = new SocketIOServer(server, {
     cors: {
@@ -83,6 +96,12 @@ let roomIdCounter = 1;
 const gameService = new GameService(io, rooms, TURN_TIME_LIMIT);
 // --- 🎮 게임 로직 관련 임시 데이터 저장소 끝 ---
 
+// ✨ NEW: 봇 인스턴스 저장소 (활성화된 봇 소켓들)
+const activeBots = {}; // { userId: socketInstance }
+
+// ✨ NEW: RobotController 인스턴스 생성 및 게임 서비스/봇 저장소 전달
+const robotController = new RobotController(gameService, activeBots);
+
 // ✍️ 모든 클라이언트에게 방 목록 업데이트 브로드캐스트
 function emitRoomsUpdate() {
     const publicRooms = Object.values(rooms).map(room => ({
@@ -114,6 +133,10 @@ function emitRoomUpdate(roomId) {
 app.get('/', (req, res) => {
     res.send('<h1>바둑이 게임 서버가 실행 중입니다.</h1>');
 });
+
+// ✨ NEW: 로봇 제어 API 라우트
+app.post('/api/robot-commands/start', authenticateGameServerApi, (req, res) => robotController.startRobots(req, res));
+app.post('/api/robot-commands/stop', authenticateGameServerApi, (req, res) => robotController.stopRobots(req, res));
 
 // ⚡️ Socket.IO 연결 이벤트 핸들러
 io.on('connection', (socket) => {
@@ -478,7 +501,11 @@ server.listen(PORT, () => {
     logDebug(`CORS 허용 Origin: ${CORS_ORIGIN.join(', ')}`);
     logDebug(`JWT Secret 로드됨: ${JWT_SECRET ? 'Yes' : 'No'}`);
     logDebug(`턴 시간 제한 (TURN_TIME_LIMIT): ${TURN_TIME_LIMIT}초`);
+    logDebug(`게임 서버 API Secret 로드됨: ${GAME_SERVER_API_SECRET ? 'Yes' : 'No'}`);
     if (!JWT_SECRET) {
         errorDebug('경고: JWT_SECRET이 설정되지 않았습니다. .env 파일을 확인해주세요!');
+    }
+    if (!GAME_SERVER_API_SECRET) {
+        errorDebug('경고: GAME_SERVER_API_SECRET이 설정되지 않았습니다. .env 파일을 확인해주세요!');
     }
 });

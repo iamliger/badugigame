@@ -1,42 +1,64 @@
 <template>
-  <div class="lobby-page container">
-    <h1 class="text-center mb-4">로비</h1>
-    <p class="text-center">환영합니다, {{ userName }}님! 현재 보유 칩: {{ userChips }}</p>
+  <div class="lobby-page-wrapper container">
+    <h1 class="text-center mb-4">바둑이 로비</h1>
 
-    <div class="d-flex justify-content-center mb-4">
-        <button @click="createRoom" class="btn btn-success">새 방 만들기</button>
-        <button @click="logout" class="btn btn-danger ml-2">로그아웃</button>
-        <!-- ✨ 전체 화면 버튼 추가 -->
-        <button v-if="!isFullScreenSupported" class="btn btn-secondary ml-2" disabled>전체 화면 (지원 안됨)</button>
-        <button v-else @click="toggleFullScreen" :class="['btn', 'ml-2', isFullScreen ? 'btn-warning' : 'btn-info']">
-            {{ isFullScreen ? '전체 화면 종료' : '전체 화면 전환' }}
-        </button>
+    <!-- 사용자 정보 및 주요 액션 버튼 -->
+    <div class="user-actions-panel card card-info card-outline mb-4">
+        <div class="card-header">
+            <h3 class="card-title"><i class="fas fa-user-circle mr-2"></i><strong>{{ userName }}</strong> 님</h3>
+            <div class="card-tools">
+                <span class="badge badge-success"><i class="fas fa-coins mr-1"></i>보유 칩: <strong>{{ Number(userChips).toLocaleString() }}</strong></span>
+            </div>
+        </div>
+        <div class="card-body d-flex justify-content-center flex-wrap">
+            <button @click="createRoom" class="btn btn-primary btn-lg mr-2 mb-2"><i class="fas fa-plus-circle mr-2"></i>새 방 만들기</button>
+            <button @click="logout" class="btn btn-danger btn-lg mb-2"><i class="fas fa-sign-out-alt mr-2"></i>로그아웃</button>
+        </div>
     </div>
 
-    <h3 class="mb-3">개설된 게임 방</h3>
+    <h3 class="mb-3"><i class="fas fa-chess-king mr-2"></i>개설된 게임 방</h3>
+    <!-- ✨ FIX: 조건부 렌더링 로직 수정 -->
     <div v-if="!isSocketConnected" class="alert alert-warning text-center">
-        Socket.IO 서버에 연결 중입니다... 잠시만 기다려주세요.
+        <i class="fas fa-spinner fa-spin mr-2"></i>Socket.IO 서버에 연결 중입니다... 잠시만 기다려주세요.
         <br>
         <small>({{ socketStatusMessage }})</small>
     </div>
-    <div v-else-if="rooms.length === 0" class="alert alert-info text-center">
-        현재 개설된 방이 없습니다. 새 방을 만들어보세요!
+    <div v-else-if="isLoadingRooms" class="alert alert-info text-center">
+        <i class="fas fa-sync-alt fa-spin mr-2"></i>방 목록을 불러오는 중입니다...
     </div>
-    <ul v-else class="list-group">
-        <li v-for="room in rooms" :key="room.id" class="list-group-item d-flex justify-content-between align-items-center">
-            <div class="room-info">
-                <h5>{{ room.name }} <span v-if="room.isPrivate" class="badge badge-secondary ml-1">비밀방</span></h5>
-                <p>인원: {{ room.players }}/{{ room.maxPlayers }} | 베팅: {{ room.betAmount }} 칩</p>
-                <span :class="['badge', room.status === 'waiting' ? 'badge-primary' : (room.status === 'playing' ? 'badge-secondary' : room.status)]">
-                    {{ room.status === 'waiting' ? '대기 중' : (room.status === 'playing' ? '게임 중' : room.status) }}
-                </span>
+    <div v-else-if="rooms.length === 0" class="alert alert-info text-center">
+        <i class="fas fa-info-circle mr-2"></i>현재 개설된 방이 없습니다. 새 방을 만들어보세요!
+    </div>
+    <div v-else class="room-list-grid">
+        <!-- 각 방을 카드 형태로 표시 -->
+        <div v-for="room in rooms" :key="room.id" class="room-card card card-widget card-outline"
+             :class="{
+                'card-primary': room.status === 'waiting',
+                'card-secondary': room.status === 'playing' || room.status === 'showdown',
+                'border-danger': room.status !== 'waiting' || room.players >= room.maxPlayers
+             }">
+            <div class="card-header">
+                <h5 class="card-title">{{ room.name }} <span v-if="room.isPrivate" class="badge badge-secondary ml-1"><i class="fas fa-lock"></i> 비밀방</span></h5>
+                <div class="card-tools">
+                    <span :class="['badge', room.status === 'waiting' ? 'badge-primary' : (room.status === 'playing' ? 'badge-secondary' : 'badge-warning')]">
+                        {{ room.status === 'waiting' ? '대기 중' : (room.status === 'playing' ? '게임 중' : '종료됨') }}
+                    </span>
+                </div>
             </div>
-            <!-- --- START MODIFICATION (handleJoinRoom 호출) --- -->
-            <button @click="handleJoinRoom(room)" :disabled="room.status !== 'waiting' || room.players >= room.maxPlayers" class="btn btn-primary">입장</button>
-            <!-- --- END MODIFICATION --- -->
-        </li>
-    </ul>
+            <div class="card-body">
+                <div class="d-flex justify-content-between align-items-center mb-2">
+                    <p class="mb-0 text-muted"><i class="fas fa-users mr-1"></i>인원: {{ room.players }}/{{ room.maxPlayers }}</p>
+                    <p class="mb-0 text-muted"><i class="fas fa-money-bill-wave mr-1"></i>베팅: {{ room.betAmount }} 칩</p>
+                </div>
+                <button @click="handleJoinRoom(room)" :disabled="room.status !== 'waiting' || room.players >= room.maxPlayers" class="btn btn-block btn-flat"
+                        :class="{'btn-primary': room.status === 'waiting' && room.players < room.maxPlayers, 'btn-secondary': room.status !== 'waiting' || room.players >= room.maxPlayers}">
+                    <i class="fas fa-door-open mr-2"></i>{{ room.status === 'waiting' && room.players < room.maxPlayers ? '입장하기' : (room.status === 'playing' ? '게임 중' : '방 가득참') }}
+                </button>
+            </div>
+        </div>
+    </div>
 
+    <!-- 새 방 만들기 모달 -->
     <div v-if="showCreateRoomModal" class="modal-overlay">
         <div class="modal-content">
             <h4>새 게임 방 만들기</h4>
@@ -52,25 +74,32 @@
                 <label for="roomPassword">비밀번호 (선택 사항):</label>
                 <input type="password" id="roomPassword" v-model="newRoom.password" class="form-control">
             </div>
-            <button @click="submitCreateRoom" class="btn btn-success">생성</button>
-            <button @click="cancelCreateRoom" class="btn btn-secondary ml-2">취소</button>
+            <div class="button-group d-flex justify-content-center gap-2 mt-3"> <!-- ✨ FIX: 버튼 그룹 스타일 조정 -->
+              <button @click="submitCreateRoom" class="btn btn-success flex-grow-1">
+                <i class="fas fa-check mr-2"></i>생성
+              </button>
+              <button @click="cancelCreateRoom" class="btn btn-secondary flex-grow-1">
+                <i class="fas fa-times mr-2"></i>취소
+              </button>
+            </div>
         </div>
     </div>
 
-    <!-- --- START MODIFICATION (비밀방 입장용 비밀번호 입력 모달) --- -->
+    <!-- 비밀방 입장용 비밀번호 입력 모달 -->
     <div v-if="showPasswordModal" class="modal-overlay">
         <div class="modal-content">
             <h4>비밀방 입장</h4>
-            <p>"{{ selectedRoomName }}" 방에 입장하려면 비밀번호를 입력하세요.</p>
+            <p class="text-muted mb-3">"{{ selectedRoomName }}" 방에 입장하려면 비밀번호를 입력하세요.</p>
             <div class="form-group">
                 <label for="joinPassword">비밀번호:</label>
                 <input type="password" id="joinPassword" v-model="joinPasswordInput" class="form-control" @keyup.enter="confirmJoinRoom">
             </div>
-            <button @click="confirmJoinRoom" class="btn btn-primary">입장</button>
-            <button @click="cancelPasswordModal" class="btn btn-secondary ml-2">취소</button>
+            <div class="button-group d-flex justify-content-center gap-2 mt-3"> <!-- ✨ FIX: 버튼 그룹 스타일 조정 -->
+              <button @click="confirmJoinRoom" class="btn btn-primary flex-grow-1"><i class="fas fa-door-open mr-2"></i>입장</button>
+              <button @click="cancelPasswordModal" class="btn btn-secondary flex-grow-1"><i class="fas fa-times mr-2"></i>취소</button>
+            </div>
         </div>
     </div>
-    <!-- --- END MODIFICATION --- -->
 
   </div>
 </template>
@@ -86,7 +115,7 @@ const socket = inject('socket');
 const isSocketConnected = inject('isSocketConnected');
 
 const userName = ref(localStorage.getItem('user_name') || '게스트');
-const userChips = ref(localStorage.getItem('user_chips') ? parseInt(localStorage.getItem('user_chips')) : 0); // 초기화 시 parseInt 처리
+const userChips = ref(localStorage.getItem('user_chips') ? parseInt(localStorage.getItem('user_chips')) : 0);
 
 const rooms = ref([]);
 const showCreateRoomModal = ref(false);
@@ -97,17 +126,16 @@ const newRoom = ref({
   password: '',
 });
 
-// ✨ FIX: socketStatusMessage의 초기값을 isSocketConnected에 따라 설정
-const socketStatusMessage = ref(isSocketConnected.value ? 'Socket.IO 서버에 연결되었습니다.' : 'Socket.IO 서버에 연결 중입니다...');
+const socketStatusMessage = ref('초기화 중...');
+const isLoadingRooms = ref(true); // ✨ NEW: 방 목록 로딩 상태 추가
 
-// --- START MODIFICATION (비밀방 입장 관련 상태 추가) ---
+// --- 비밀방 입장 관련 상태 추가 ---
 const showPasswordModal = ref(false);
 const selectedRoomId = ref(null);
 const selectedRoomName = ref('');
 const joinPasswordInput = ref('');
+// --- 끝: 비밀방 입장 관련 상태 추가 ---
 
-const isFullScreen = ref(false); // ✨ 전체 화면 상태 추적
-// --- END MODIFICATION ---
 
 const createRoom = () => {
   showCreateRoomModal.value = true;
@@ -128,6 +156,10 @@ const submitCreateRoom = () => {
     logger.notify('방 제목과 베팅 금액을 입력해주세요.', 'warn');
     return;
   }
+  if (newRoom.value.betAmount <= 0) { // 최소 베팅액 0 방지
+      logger.notify('최소 베팅 금액은 0보다 커야 합니다.', 'warn');
+      return;
+  }
   if (newRoom.value.betAmount > userChips.value) {
       logger.notify('보유 칩보다 높은 베팅 금액으로 방을 생성할 수 없습니다.', 'warn');
       return;
@@ -143,7 +175,7 @@ const submitCreateRoom = () => {
   socket.emit('createRoom', newRoom.value, (response) => {
     if (response.success) {
       logger.log('[Lobby] 방 생성 성공:', response.room);
-      socket.emit('joinRoom', { roomId: response.room.id, password: newRoom.value.password }, (joinResponse) => {
+      socket.emit('joinRoom', { roomId: response.room.id, password: newRoom.value.password, initialChips: userChips.value }, (joinResponse) => {
         if (joinResponse.success) {
             logger.log('[Lobby] 방 생성 후 자동 입장 성공:', joinResponse.room);
             router.push(`/room/${joinResponse.room.id}`);
@@ -161,17 +193,14 @@ const submitCreateRoom = () => {
   cancelCreateRoom();
 };
 
-// --- START MODIFICATION (handleJoinRoom 함수 추가) ---
 const handleJoinRoom = (room) => {
     if (room.isPrivate) {
-        // 비밀방인 경우 비밀번호 입력 모달 띄우기
         selectedRoomId.value = room.id;
         selectedRoomName.value = room.name;
-        joinPasswordInput.value = ''; // 비밀번호 입력 필드 초기화
+        joinPasswordInput.value = '';
         showPasswordModal.value = true;
     } else {
-        // 일반 방인 경우 바로 입장 시도
-        joinRoom(room.id, null); // 비밀번호 없이 입장
+        joinRoom(room.id, null);
     }
 };
 
@@ -190,8 +219,6 @@ const cancelPasswordModal = () => {
     selectedRoomName.value = '';
     joinPasswordInput.value = '';
 };
-// --- END MODIFICATION ---
-
 
 const joinRoom = (roomId, password = null) => {
     logger.log('[Lobby] 방 입장 요청:', roomId, '비밀번호 유무:', !!password, '내 칩:', userChips.value);
@@ -203,7 +230,7 @@ const joinRoom = (roomId, password = null) => {
     socket.emit('joinRoom', {
         roomId: roomId,
         password: password,
-        initialChips: userChips.value // ✨ MODIFIED: 사용자 칩 정보를 서버로 전달
+        initialChips: userChips.value // 사용자 칩 정보를 서버로 전달
     }, (response) => {
         if (response.success) {
             logger.log('[Lobby] 방 입장 성공:', response.room);
@@ -224,8 +251,9 @@ const logout = () => {
 };
 
 const handleRoomsUpdated = (updatedRooms) => {
-    logger.log('[Lobby] 방 목록 업데이트 수신:', updatedRooms);
+  logger.log('[Lobby] 방 목록 업데이트 수신:', updatedRooms);
     rooms.value = [...updatedRooms];
+    isLoadingRooms.value = false; // ✨ NEW: 방 목록 로딩 완료
     nextTick(() => {
         logger.log('[Lobby] UI 갱신 후 rooms.value:', rooms.value);
         logger.log('[Lobby] UI 갱신 후 rooms.length:', rooms.value.length);
@@ -260,138 +288,211 @@ const fetchUserChips = async () => {
 };
 
 const requestRoomsAndChips = () => {
-    logger.log('[Lobby] Socket.IO 연결 상태:', isSocketConnected.value);
+  logger.log('[Lobby] Socket.IO 연결 상태:', isSocketConnected.value);
     if (isSocketConnected.value) {
         logger.log('[Lobby] Socket.IO 연결됨, 방 목록 및 칩 요청 중...');
+        isLoadingRooms.value = true; // ✨ NEW: 방 목록 로딩 시작
         socket.emit('getRooms');
         fetchUserChips();
     } else {
         logger.warn('[Lobby] Socket.IO 연결되지 않음. Socket.IO 플러그인에서 리다이렉션 처리 예정.');
-        const token = localStorage.getItem('jwt_token');
-        if (token && !socket.connected) {
-            logger.log('[Lobby] 토큰 존재하지만 연결 끊김, Socket.IO 재연결 시도 중...');
-            socket.connect();
-        }
+        rooms.value = []; // 방 목록 초기화 (UI 비우기)
+        socketStatusMessage.value = 'Socket.IO 서버에 연결 중입니다...';
+        isLoadingRooms.value = false; // ✨ NEW: 연결 끊김 상태에서는 로딩 아님
     }
 };
 
+
 onMounted(() => {
-  const unwatchIsConnected = watch(isSocketConnected, (newValue) => {
+    // ✨ FIX: Socket.IO 이벤트 리스너를 watch 훅 외부에서 등록
+    // `socketPlugin.js`에서 이미 `isSocketConnected`를 `socket.on('connect')`와 `socket.on('disconnect')`로 업데이트하므로,
+    // 이 watch 훅 내에서 추가적인 `socket.on('connect')` 등은 불필요합니다.
+
+    // 이전에 `LoginView.vue`에서 `socket.connect()`를 제거했으므로,
+    // `LobbyView.vue`에 진입할 때 `isSocketConnected`가 `true`가 될 때까지 기다립니다.
+    // `socketPlugin.js`에서 JWT 토큰 존재 여부를 확인하고 `socket.connect()`를 호출해야 합니다.
+
+    const unwatchIsConnected = watch(isSocketConnected, (newValue) => {
         logger.log('[Lobby] isSocketConnected watch 발동, newValue:', newValue);
         if (newValue === true) {
-            logger.log('[Lobby] isSocketConnected가 true로 변경됨, 방 목록 및 칩 요청.');
+            logger.log('[Lobby] Socket.IO 연결됨, 방 목록 및 칩 요청.');
             requestRoomsAndChips();
-            socketStatusMessage.value = 'Socket.IO 서버에 연결되었습니다.'; // ✨ 재연결 성공 시 메시지 업데이트
+            socketStatusMessage.value = 'Socket.IO 서버에 연결되었습니다.';
         } else {
-            logger.warn('[Lobby] isSocketConnected가 false로 변경됨. Socket.IO 플러그인에서 리다이렉션 처리 예정.');
+            logger.warn('[Lobby] Socket.IO 연결되지 않음. Socket.IO 플러그인에서 리다이렉션 처리 예정.');
             rooms.value = []; // 방 목록 초기화 (UI 비우기)
-            socketStatusMessage.value = 'Socket.IO 서버에 연결 중입니다...'; // ✨ 연결 끊김 시 메시지 업데이트
+            socketStatusMessage.value = 'Socket.IO 서버에 연결 중입니다...';
+            // ✨ NEW: 연결이 끊겼는데 토큰이 있다면 재연결을 시도 (socketPlugin.js의 로직과 일관성을 위해)
             const token = localStorage.getItem('jwt_token');
             if (token && !socket.connected) {
                 logger.log('[Lobby] 토큰 존재하지만 연결 끊김, Socket.IO 재연결 시도 중...');
-                socket.connect(); // 재연결 시도
+                socket.connect();
             }
         }
     }, { immediate: true });
 
+
     socket.on('roomsUpdated', handleRoomsUpdated);
+
+    // ✨ NEW: Socket.IO 연결/오류 상태를 직접 로깅하여 디버깅 강화
+    socket.on('connect', () => {
+        logger.log('[Lobby] Socket.IO: 연결 성공');
+        socketStatusMessage.value = 'Socket.IO 서버에 연결되었습니다.';
+    });
+    socket.on('disconnect', (reason) => {
+        logger.warn(`[Lobby] Socket.IO: 연결 해제됨 (${reason})`);
+        socketStatusMessage.value = `Socket.IO 서버에 연결 해제됨: ${reason}`;
+    });
+    socket.on('connect_error', (error) => {
+        logger.error(`[Lobby] Socket.IO: 연결 오류 발생 - ${error.message}`);
+        socketStatusMessage.value = `Socket.IO 연결 오류: ${error.message}`;
+    });
+    socket.on('reconnect_attempt', (attemptNumber) => {
+        logger.info(`[Lobby] Socket.IO: 재연결 시도 중... (${attemptNumber}번째)`);
+        socketStatusMessage.value = `Socket.IO 재연결 시도 중... (${attemptNumber}번째)`;
+    });
+    socket.on('reconnect_failed', () => {
+        logger.error('[Lobby] Socket.IO: 재연결 실패');
+        socketStatusMessage.value = 'Socket.IO 재연결 실패';
+    });
+    socket.on('reconnect', (attemptNumber) => {
+        logger.log(`[Lobby] Socket.IO: 재연결 성공 (${attemptNumber}번째)`);
+        socketStatusMessage.value = 'Socket.IO 서버에 재연결되었습니다.';
+    });
 
 
     onUnmounted(() => {
         unwatchIsConnected();
         socket.off('roomsUpdated', handleRoomsUpdated);
+        // ✨ NEW: 모든 Socket.IO 이벤트 리스너 해제
         socket.off('connect');
         socket.off('disconnect');
         socket.off('connect_error');
         socket.off('reconnect_attempt');
-        socket.off('reconnect');
         socket.off('reconnect_failed');
+        socket.off('reconnect');
     });
 });
-
-watch(rooms, (newRooms) => {
-  logger.log('[Lobby] Rooms ref detected change. Current rooms:', newRooms);
-}, { deep: true, immediate: true });
 </script>
 
 <style scoped>
-.lobby-page {
-  max-width: 900px;
-  margin: 50px auto;
+.lobby-page-wrapper {
+  max-width: 1200px; /* 데스크톱에서 최대 너비 */
+  margin: 20px auto;
   padding: 20px;
   border: 1px solid #e0e0e0;
   border-radius: 8px;
   box-shadow: 0 4px 12px rgba(0,0,0,0.05);
   background-color: #f8f9fa;
 }
-.text-center { text-align: center; }
-.mb-4 { margin-bottom: 1.5rem; }
-.mb-3 { margin-bottom: 1rem; }
-.ml-2 { margin-left: 0.5rem; }
-.d-flex { display: flex; }
-.justify-content-center { justify-content: center; }
 
-.btn {
-  padding: 0.75rem 1.25rem;
-  border-radius: 0.3rem;
-  font-size: 1rem;
-  cursor: pointer;
-  border: none;
-  transition: background-color 0.2s ease;
+h1, h3 {
+    color: #343a40;
+    font-weight: 600;
 }
-.btn-success { background-color: #28a745; color: white; }
-.btn-success:hover { background-color: #218838; }
-.btn-danger { background-color: #dc3545; color: white; }
-.btn-danger:hover { background-color: #c82333; }
-.btn-primary { background-color: #007bff; color: white; }
-.btn-primary:hover { background-color: #0056b3; }
-.btn-secondary { background-color: #6c757d; color: white; }
-.btn-secondary:hover { background-color: #5a6268; }
+
+/* 사용자 정보 및 액션 패널 */
+.user-actions-panel.card {
+    border-top: 3px solid #007bff; /* AdminLTE primary color */
+    box-shadow: 0 0 1px rgba(0,0,0,.125),0 1px 3px rgba(0,0,0,.2);
+}
+.user-actions-panel .card-header {
+    background-color: #f4f6f9; /* 약간 다른 배경색 */
+    border-bottom: 1px solid rgba(0,0,0,.125);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 0.75rem 1.25rem;
+}
+.user-actions-panel .card-title {
+    font-size: 1.15rem;
+    font-weight: 600;
+    color: #343a40;
+}
+.user-actions-panel .card-tools .badge {
+    padding: 0.5em 0.8em;
+    font-size: 0.9em;
+}
+.user-actions-panel .card-body {
+    padding: 1.25rem;
+    justify-content: center; /* 버튼 중앙 정렬 */
+}
+.user-actions-panel .btn-lg {
+    min-width: 180px; /* 버튼 최소 너비 */
+    font-size: 1.05rem;
+}
+.user-actions-panel .btn-lg.mr-2 {
+    margin-right: 15px; /* 버튼 사이 간격 */
+}
+
+/* 방 목록 그리드 레이아웃 */
+.room-list-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); /* 최소 280px, 반응형 */
+    gap: 20px; /* 카드 사이 간격 */
+}
+
+.room-card.card {
+    background-color: #ffffff;
+    box-shadow: 0 2px 5px rgba(0,0,0,0.08);
+    border-radius: 0.5rem;
+    transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+.room-card.card:hover {
+    transform: translateY(-5px);
+    box-shadow: 0 6px 15px rgba(0,0,0,0.15);
+}
+.room-card.card-primary { border-top-color: #007bff; }
+.room-card.card-secondary { border-top-color: #6c757d; }
+.room-card.border-danger { border-color: #dc3545; } /* 비활성 방 표시 */
 
 
-.list-group {
-  list-style: none;
-  padding: 0;
+.room-card .card-header {
+    padding: 0.75rem 1.25rem;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    border-bottom: 1px solid rgba(0,0,0,.08);
+    background-color: #fbfdff; /* 헤더 배경색 */
 }
-.list-group-item {
-  background-color: white;
-  border: 1px solid #e0e0e0;
-  border-radius: 0.3rem;
-  padding: 1rem 1.5rem;
-  margin-bottom: 10px;
-  box-shadow: 0 2px 4px rgba(0,0,0,0.03);
+.room-card .card-title {
+    font-size: 1.1rem;
+    font-weight: 500;
+    margin-bottom: 0;
 }
-.room-info h5 {
-  margin-bottom: 0.25rem;
-  font-size: 1.25rem;
-  color: #343a40;
+.room-card .card-body {
+    padding: 1.25rem;
 }
-.room-info p {
-  margin-bottom: 0.5rem;
-  color: #6c757d;
+.room-card .card-text {
+    font-size: 0.95rem;
+    color: #555;
+    margin-bottom: 0.5rem;
 }
-.badge {
-  padding: 0.4em 0.6em;
-  border-radius: 0.25rem;
-  font-size: 0.75em;
-  font-weight: bold;
-  color: white;
+.room-card .badge {
+    font-size: 0.85em;
+    padding: 0.4em 0.7em;
 }
-.badge-primary { background-color: #007bff; }
-.badge-secondary { background-color: #6c757d; }
-.badge-info { background-color: #17a2b8; }
-.badge-warning { background-color: #ffc107; color: #343a40; }
+.room-card .btn-block {
+    margin-top: 15px;
+    font-size: 1rem;
+    padding: 0.65rem 1rem;
+}
+.room-card .btn-primary { background-color: #007bff; border-color: #007bff; color: white; }
+.room-card .btn-primary:hover { background-color: #0069d9; border-color: #0062cc; }
+.room-card .btn-secondary { background-color: #6c757d; border-color: #6c757d; color: white; opacity: 0.8; cursor: not-allowed;}
+.room-card .btn-secondary:hover { background-color: #5a6268; border-color: #5a6268; }
 
+/* 모달 스타일 (재사용) */
 .modal-overlay {
     position: fixed;
     top: 0;
     left: 0;
     width: 100%;
     height: 100%;
-    background: rgba(0, 0, 0, 0.6);
+    background: rgba(0, 0, 0, 0.6); /* ✨ FIX: 배경을 더 어둡게 하여 모달을 부각 */
     display: flex;
     justify-content: center;
-    align-items: center;
+    align-items: center; /* ✨ FIX: 모달 수직 중앙 정렬 */
     z-index: 1000;
 }
 
@@ -401,13 +502,19 @@ watch(rooms, (newRooms) => {
     border-radius: 10px;
     box-shadow: 0 5px 20px rgba(0, 0, 0, 0.4);
     width: 400px;
+    max-width: 90%; /* 모바일 대응 */
+    /* ✨ FIX: PC 환경에서 모달이 너무 내려오지 않도록 margin-top 조정 */
+    margin-top: -50px; /* 화면 중앙보다 약간 위로 */
     text-align: center;
+    position: relative; /* z-index가 제대로 작동하도록 */
 }
+
 .modal-content h4 {
     margin-bottom: 20px;
     color: #343a40;
     font-size: 1.5rem;
 }
+
 .modal-content p {
     margin-bottom: 15px;
     color: #555;
@@ -429,5 +536,134 @@ watch(rooms, (newRooms) => {
     border-radius: 5px;
     box-sizing: border-box;
     font-size: 1rem;
+}
+/* ✅ 버튼을 한 줄로 정렬 */
+.modal-content .button-group {
+    display: flex;
+    justify-content: center;
+    gap: 10px; /* 버튼 간격 */
+    margin-top: 15px;
+}
+
+.modal-content .button-group button {
+    flex: 1;
+    padding: 0.75rem 1.25rem;
+    font-size: 1rem;
+    border-radius: 0.3rem;
+}
+
+.modal-content .btn-success {
+    background-color: #28a745;
+    color: white;
+    border: none;
+}
+.modal-content .btn-success:hover {
+    background-color: #218838;
+}
+
+.modal-content .btn-secondary {
+    background-color: #6c757d;
+    color: white;
+    border: none;
+}
+.modal-content .btn-secondary:hover {
+    background-color: #5a6268;
+}
+
+
+/* --- 반응형 디자인 (Media Queries) --- */
+
+/* 태블릿 (최대 992px) */
+@media (max-width: 992px) {
+  .lobby-page-wrapper {
+    max-width: 95%; /* 너비 확장 */
+    padding: 15px;
+  }
+  .room-list-grid {
+    grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); /* 카드 너비 최소값 조정 */
+    gap: 15px;
+  }
+  .user-actions-panel .btn-lg {
+      min-width: unset; /* 최소 너비 제한 해제 */
+      width: calc(50% - 10px); /* 2개씩 한 줄에 */
+  }
+  .user-actions-panel .btn-lg.mr-2 {
+      margin-right: 10px;
+  }
+}
+
+/* 모바일 (최대 768px) */
+@media (max-width: 768px) {
+  .lobby-page-wrapper {
+    margin: 10px auto;
+    padding: 10px;
+  }
+  h1 {
+    font-size: 2.2rem;
+  }
+  h3 {
+    font-size: 1.5rem;
+  }
+  .user-actions-panel .card-header {
+      flex-direction: column; /* 헤더 세로 정렬 */
+      align-items: flex-start;
+  }
+  .user-actions-panel .card-title {
+      margin-bottom: 10px;
+  }
+  .user-actions-panel .card-body {
+      flex-direction: column; /* 버튼 세로 정렬 */
+      padding: 1rem;
+  }
+  .user-actions-panel .btn-lg {
+      width: 100%; /* 버튼 폭 최대로 */
+      margin-right: 0 !important;
+      margin-bottom: 10px;
+  }
+  .room-list-grid {
+    grid-template-columns: 1fr; /* 모바일에서 1열로 정렬 */
+    gap: 15px;
+  }
+  .modal-content {
+      padding: 20px;
+      width: 95%; /* 모달 폭 더 넓게 */
+      margin-top: 0; /* 모바일에서는 중앙 정렬 */
+  }
+  .modal-content h4 {
+      font-size: 1.3rem;
+  }
+  .modal-content p {
+      font-size: 0.9rem;
+  }
+}
+
+/* 추가 모바일 최적화 (최대 576px) */
+@media (max-width: 576px) {
+    .lobby-page-wrapper {
+        padding: 5px;
+        margin: 5px auto;
+    }
+    h1 {
+        font-size: 1.8rem;
+    }
+    h3 {
+        font-size: 1.3rem;
+    }
+    .user-actions-panel .card-title {
+        font-size: 1rem;
+    }
+    .user-actions-panel .card-tools .badge {
+        font-size: 0.8em;
+    }
+    .user-actions-panel .card-body {
+        padding: 0.8rem;
+    }
+    .modal-content {
+        max-width: 95%;
+    }
+    .modal-content .button-group {
+      flex-direction: column; /* 모바일에서 버튼 세로 정렬 */
+      gap: 5px;
+    }
 }
 </style>

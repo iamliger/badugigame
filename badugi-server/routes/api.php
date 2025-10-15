@@ -3,17 +3,8 @@
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\Api\AuthController;
+use App\Http\Controllers\RobotController; // ✨ FIX: 네임스페이스 경로 수정
 
-/*
-|--------------------------------------------------------------------------
-| API Routes
-|--------------------------------------------------------------------------
-|
-| Here is where you can register API routes for your application. These
-| routes are loaded by the RouteServiceProvider and all of them will
-| be assigned to the "api" middleware group. Make something great!
-|
-*/
 
 Route::middleware('auth:sanctum')->get('/user', function (Request $request) {
     return $request->user();
@@ -31,4 +22,11 @@ Route::group([
     Route::post('me', [AuthController::class, 'me']); // 인증된 사용자 정보 가져오기
     Route::get('user-chips', [AuthController::class, 'getUserChips']);
     Route::get('check-token', [AuthController::class, 'checkTokenValidity']);
+});
+
+// ✨ NEW: 로봇 제어 API 라우트
+Route::middleware('auth:sanctum')->group(function () {
+    Route::post('/robot-control/start', [RobotController::class, 'startRobots'])->name('api.robot-control.start'); // ✨ FIX: 라우트 이름 지정
+    Route::post('/robot-control/stop', [RobotController::class, 'stopRobots'])->name('api.robot-control.stop'); // ✨ FIX: 라우트 이름 지정
+    // 필요시 로봇 개수 설정 API 등 추가 가능
 });

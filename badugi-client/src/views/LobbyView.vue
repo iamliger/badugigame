@@ -17,7 +17,6 @@
     </div>
 
     <h3 class="mb-3"><i class="fas fa-chess-king mr-2"></i>개설된 게임 방</h3>
-    <!-- ✨ FIX: 조건부 렌더링 로직 수정 -->
     <div v-if="!isSocketConnected" class="alert alert-warning text-center">
         <i class="fas fa-spinner fa-spin mr-2"></i>Socket.IO 서버에 연결 중입니다... 잠시만 기다려주세요.
         <br>
@@ -30,7 +29,6 @@
         <i class="fas fa-info-circle mr-2"></i>현재 개설된 방이 없습니다. 새 방을 만들어보세요!
     </div>
     <div v-else class="room-list-grid">
-        <!-- 각 방을 카드 형태로 표시 -->
         <div v-for="room in rooms" :key="room.id" class="room-card card card-widget card-outline"
              :class="{
                 'card-primary': room.status === 'waiting',
@@ -74,7 +72,7 @@
                 <label for="roomPassword">비밀번호 (선택 사항):</label>
                 <input type="password" id="roomPassword" v-model="newRoom.password" class="form-control">
             </div>
-            <div class="button-group d-flex justify-content-center gap-2 mt-3"> <!-- ✨ FIX: 버튼 그룹 스타일 조정 -->
+            <div class="button-group d-flex justify-content-center gap-2 mt-3">
               <button @click="submitCreateRoom" class="btn btn-success flex-grow-1">
                 <i class="fas fa-check mr-2"></i>생성
               </button>
@@ -94,7 +92,7 @@
                 <label for="joinPassword">비밀번호:</label>
                 <input type="password" id="joinPassword" v-model="joinPasswordInput" class="form-control" @keyup.enter="confirmJoinRoom">
             </div>
-            <div class="button-group d-flex justify-content-center gap-2 mt-3"> <!-- ✨ FIX: 버튼 그룹 스타일 조정 -->
+            <div class="button-group d-flex justify-content-center gap-2 mt-3">
               <button @click="confirmJoinRoom" class="btn btn-primary flex-grow-1"><i class="fas fa-door-open mr-2"></i>입장</button>
               <button @click="cancelPasswordModal" class="btn btn-secondary flex-grow-1"><i class="fas fa-times mr-2"></i>취소</button>
             </div>
@@ -111,7 +109,7 @@ import { logger } from '../utils/logger';
 import axios from 'axios';
 
 const router = useRouter();
-const socket = inject('socket');
+const socket = inject('socket'); // socketInstance ref
 const isSocketConnected = inject('isSocketConnected');
 
 const userName = ref(localStorage.getItem('user_name') || '게스트');
@@ -127,14 +125,12 @@ const newRoom = ref({
 });
 
 const socketStatusMessage = ref('초기화 중...');
-const isLoadingRooms = ref(true); // ✨ NEW: 방 목록 로딩 상태 추가
+const isLoadingRooms = ref(true);
 
-// --- 비밀방 입장 관련 상태 추가 ---
 const showPasswordModal = ref(false);
 const selectedRoomId = ref(null);
 const selectedRoomName = ref('');
 const joinPasswordInput = ref('');
-// --- 끝: 비밀방 입장 관련 상태 추가 ---
 
 
 const createRoom = () => {
@@ -156,7 +152,7 @@ const submitCreateRoom = () => {
     logger.notify('방 제목과 베팅 금액을 입력해주세요.', 'warn');
     return;
   }
-  if (newRoom.value.betAmount <= 0) { // 최소 베팅액 0 방지
+  if (newRoom.value.betAmount <= 0) {
       logger.notify('최소 베팅 금액은 0보다 커야 합니다.', 'warn');
       return;
   }
@@ -172,24 +168,33 @@ const submitCreateRoom = () => {
       return;
   }
 
-  socket.emit('createRoom', newRoom.value, (response) => {
-    if (response.success) {
-      logger.log('[Lobby] 방 생성 성공:', response.room);
-      socket.emit('joinRoom', { roomId: response.room.id, password: newRoom.value.password, initialChips: userChips.value }, (joinResponse) => {
-        if (joinResponse.success) {
-            logger.log('[Lobby] 방 생성 후 자동 입장 성공:', joinResponse.room);
-            router.push(`/room/${joinResponse.room.id}`);
-        } else {
-            logger.notify('방 생성 후 자동 입장 실패: ' + joinResponse.message, 'error');
-            if (isSocketConnected.value) {
-              socket.emit('getRooms');
+  // ✨ FIX: socket.value.emit으로 변경
+  if (socket.value) {
+    socket.value.emit('createRoom', newRoom.value, (response) => {
+      if (response.success) {
+        logger.log('[Lobby] 방 생성 성공:', response.room);
+        // ✨ FIX: socket.value.emit으로 변경
+        if (socket.value) { // 중첩된 emit에도 socket.value 확인
+          socket.value.emit('joinRoom', { roomId: response.room.id, password: newRoom.value.password, initialChips: userChips.value }, (joinResponse) => {
+            if (joinResponse.success) {
+                logger.log('[Lobby] 방 생성 후 자동 입장 성공:', joinResponse.room);
+                router.push(`/room/${joinResponse.room.id}`);
+            } else {
+                logger.notify('방 생성 후 자동 입장 실패: ' + joinResponse.message, 'error');
+                if (isSocketConnected.value) {
+                  // ✨ FIX: socket.value.emit으로 변경
+                  if (socket.value) {
+                    socket.value.emit('getRooms');
+                  }
+                }
             }
+          });
         }
-      });
-    } else {
-      logger.notify('방 생성 실패: ' + response.message, 'error');
-    }
-  });
+      } else {
+        logger.notify('방 생성 실패: ' + response.message, 'error');
+      }
+    });
+  }
   cancelCreateRoom();
 };
 
@@ -227,18 +232,21 @@ const joinRoom = (roomId, password = null) => {
         return;
     }
 
-    socket.emit('joinRoom', {
-        roomId: roomId,
-        password: password,
-        initialChips: userChips.value // 사용자 칩 정보를 서버로 전달
-    }, (response) => {
-        if (response.success) {
-            logger.log('[Lobby] 방 입장 성공:', response.room);
-            router.push(`/room/${response.room.id}`);
-        } else {
-            logger.notify('방 입장 실패: ' + response.message, 'error');
-        }
-    });
+    // ✨ FIX: socket.value.emit으로 변경
+    if (socket.value) {
+      socket.value.emit('joinRoom', {
+          roomId: roomId,
+          password: password,
+          initialChips: userChips.value
+      }, (response) => {
+          if (response.success) {
+              logger.log('[Lobby] 방 입장 성공:', response.room);
+              router.push(`/room/${response.room.id}`);
+          } else {
+              logger.notify('방 입장 실패: ' + response.message, 'error');
+          }
+      });
+    }
 };
 
 const logout = () => {
@@ -246,14 +254,16 @@ const logout = () => {
   localStorage.removeItem('user_name');
   localStorage.removeItem('user_id');
   localStorage.removeItem('user_chips');
-  socket.disconnect();
+  if (socket.value) {
+    socket.value.disconnect();
+  }
   router.replace('/login');
 };
 
 const handleRoomsUpdated = (updatedRooms) => {
   logger.log('[Lobby] 방 목록 업데이트 수신:', updatedRooms);
     rooms.value = [...updatedRooms];
-    isLoadingRooms.value = false; // ✨ NEW: 방 목록 로딩 완료
+    isLoadingRooms.value = false;
     nextTick(() => {
         logger.log('[Lobby] UI 갱신 후 rooms.value:', rooms.value);
         logger.log('[Lobby] UI 갱신 후 rooms.length:', rooms.value.length);
@@ -291,27 +301,21 @@ const requestRoomsAndChips = () => {
   logger.log('[Lobby] Socket.IO 연결 상태:', isSocketConnected.value);
     if (isSocketConnected.value) {
         logger.log('[Lobby] Socket.IO 연결됨, 방 목록 및 칩 요청 중...');
-        isLoadingRooms.value = true; // ✨ NEW: 방 목록 로딩 시작
-        socket.emit('getRooms');
+        isLoadingRooms.value = true;
+        if (socket.value) {
+          socket.value.emit('getRooms');
+        }
         fetchUserChips();
     } else {
-        logger.warn('[Lobby] Socket.IO 연결되지 않음. Socket.IO 플러그인에서 리다이렉션 처리 예정.');
-        rooms.value = []; // 방 목록 초기화 (UI 비우기)
+        logger.warn('[Lobby] Socket.IO 연결되지 않음. 로비에서 연결 대기.');
+        rooms.value = [];
         socketStatusMessage.value = 'Socket.IO 서버에 연결 중입니다...';
-        isLoadingRooms.value = false; // ✨ NEW: 연결 끊김 상태에서는 로딩 아님
+        isLoadingRooms.value = false;
     }
 };
 
 
 onMounted(() => {
-    // ✨ FIX: Socket.IO 이벤트 리스너를 watch 훅 외부에서 등록
-    // `socketPlugin.js`에서 이미 `isSocketConnected`를 `socket.on('connect')`와 `socket.on('disconnect')`로 업데이트하므로,
-    // 이 watch 훅 내에서 추가적인 `socket.on('connect')` 등은 불필요합니다.
-
-    // 이전에 `LoginView.vue`에서 `socket.connect()`를 제거했으므로,
-    // `LobbyView.vue`에 진입할 때 `isSocketConnected`가 `true`가 될 때까지 기다립니다.
-    // `socketPlugin.js`에서 JWT 토큰 존재 여부를 확인하고 `socket.connect()`를 호출해야 합니다.
-
     const unwatchIsConnected = watch(isSocketConnected, (newValue) => {
         logger.log('[Lobby] isSocketConnected watch 발동, newValue:', newValue);
         if (newValue === true) {
@@ -319,58 +323,54 @@ onMounted(() => {
             requestRoomsAndChips();
             socketStatusMessage.value = 'Socket.IO 서버에 연결되었습니다.';
         } else {
-            logger.warn('[Lobby] Socket.IO 연결되지 않음. Socket.IO 플러그인에서 리다이렉션 처리 예정.');
-            rooms.value = []; // 방 목록 초기화 (UI 비우기)
-            socketStatusMessage.value = 'Socket.IO 서버에 연결 중입니다...';
-            // ✨ NEW: 연결이 끊겼는데 토큰이 있다면 재연결을 시도 (socketPlugin.js의 로직과 일관성을 위해)
-            const token = localStorage.getItem('jwt_token');
-            if (token && !socket.connected) {
-                logger.log('[Lobby] 토큰 존재하지만 연결 끊김, Socket.IO 재연결 시도 중...');
-                socket.connect();
-            }
+            logger.warn('[Lobby] Socket.IO 연결 끊김 감지.');
+            rooms.value = [];
+            socketStatusMessage.value = `Socket.IO 서버에 연결 끊김. (${socket.value?.io?.engine?.transport?.name || 'Unknown'}) 재연결 시도 중...`;
+            isLoadingRooms.value = false;
         }
     }, { immediate: true });
 
 
-    socket.on('roomsUpdated', handleRoomsUpdated);
-
-    // ✨ NEW: Socket.IO 연결/오류 상태를 직접 로깅하여 디버깅 강화
-    socket.on('connect', () => {
-        logger.log('[Lobby] Socket.IO: 연결 성공');
-        socketStatusMessage.value = 'Socket.IO 서버에 연결되었습니다.';
-    });
-    socket.on('disconnect', (reason) => {
-        logger.warn(`[Lobby] Socket.IO: 연결 해제됨 (${reason})`);
-        socketStatusMessage.value = `Socket.IO 서버에 연결 해제됨: ${reason}`;
-    });
-    socket.on('connect_error', (error) => {
-        logger.error(`[Lobby] Socket.IO: 연결 오류 발생 - ${error.message}`);
-        socketStatusMessage.value = `Socket.IO 연결 오류: ${error.message}`;
-    });
-    socket.on('reconnect_attempt', (attemptNumber) => {
-        logger.info(`[Lobby] Socket.IO: 재연결 시도 중... (${attemptNumber}번째)`);
-        socketStatusMessage.value = `Socket.IO 재연결 시도 중... (${attemptNumber}번째)`;
-    });
-    socket.on('reconnect_failed', () => {
-        logger.error('[Lobby] Socket.IO: 재연결 실패');
-        socketStatusMessage.value = 'Socket.IO 재연결 실패';
-    });
-    socket.on('reconnect', (attemptNumber) => {
-        logger.log(`[Lobby] Socket.IO: 재연결 성공 (${attemptNumber}번째)`);
-        socketStatusMessage.value = 'Socket.IO 서버에 재연결되었습니다.';
-    });
+    if (socket.value) {
+      socket.value.on('roomsUpdated', handleRoomsUpdated);
+      socket.value.on('connect', () => {
+          logger.log('[Lobby] Socket.IO: 연결 성공 (Lobby Listener)');
+          socketStatusMessage.value = 'Socket.IO 서버에 연결되었습니다.';
+      });
+      socket.value.on('disconnect', (reason) => {
+          logger.warn(`[Lobby] Socket.IO: 연결 해제됨 (Lobby Listener - ${reason})`);
+          socketStatusMessage.value = `Socket.IO 서버에 연결 해제됨: ${reason}`;
+      });
+      socket.value.on('connect_error', (error) => {
+          logger.error(`[Lobby] Socket.IO: 연결 오류 발생 (Lobby Listener) - ${error.message}`);
+          socketStatusMessage.value = `Socket.IO 연결 오류: ${error.message}`;
+      });
+      socket.value.on('reconnect_attempt', (attemptNumber) => {
+          logger.info(`[Lobby] Socket.IO: 재연결 시도 중 (Lobby Listener - ${attemptNumber}번째)`);
+          socketStatusMessage.value = `Socket.IO 재연결 시도 중... (${attemptNumber}번째)`;
+      });
+      socket.value.on('reconnect_failed', () => {
+          logger.error('[Lobby] Socket.IO: 재연결 실패 (Lobby Listener)');
+          socketStatusMessage.value = 'Socket.IO 재연결 실패';
+      });
+      socket.value.on('reconnect', (attemptNumber) => {
+          logger.log(`[Lobby] Socket.IO: 재연결 성공 (Lobby Listener - ${attemptNumber}번째)`);
+          socketStatusMessage.value = 'Socket.IO 서버에 재연결되었습니다.';
+      });
+    }
 
 
     onUnmounted(() => {
         unwatchIsConnected();
-        socket.off('roomsUpdated', handleRoomsUpdated);
-        // ✨ NEW: 모든 Socket.IO 이벤트 리스너 해제
-        socket.off('connect');
-        socket.off('disconnect');
-        socket.off('connect_error');
-        socket.off('reconnect_attempt');
-        socket.off('reconnect_failed');
-        socket.off('reconnect');
+        if (socket.value) {
+          socket.value.off('roomsUpdated', handleRoomsUpdated);
+          socket.value.off('connect');
+          socket.value.off('disconnect');
+          socket.value.off('connect_error');
+          socket.value.off('reconnect_attempt');
+          socket.value.off('reconnect_failed');
+          socket.value.off('reconnect');
+        }
     });
 });
 </script>

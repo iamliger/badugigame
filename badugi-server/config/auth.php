@@ -12,9 +12,18 @@ return [
             'driver' => 'session',
             'provider' => 'users',
         ],
-        'api' => [ // 이 'api' 가드가 올바르게 정의되어 있어야 합니다.
-            'driver' => 'jwt', // JWT 드라이버를 사용하도록 설정
+        'sanctum' => [
+            'driver' => 'sanctum',
             'provider' => 'users',
+        ],
+        'api' => [ // JWTAuth를 위한 api 가드 (기존 사용자)
+            'driver' => 'jwt',
+            'provider' => 'users',
+        ],
+        // ✨ FIX: 로봇 전용 가드 (Sanctum 발급용) - 드라이버를 'sanctum'으로 변경
+        'robot' => [
+            'driver' => 'sanctum', // ✨ MODIFIED: 'eloquent' 대신 'sanctum' 드라이버 사용
+            'provider' => 'robots', // 'robots' 프로바이더 사용
         ],
     ],
 
@@ -23,11 +32,11 @@ return [
             'driver' => 'eloquent',
             'model' => App\Models\User::class,
         ],
-
-        // 'users' => [
-        //     'driver' => 'database',
-        //     'table' => 'users',
-        // ],
+        // 로봇 전용 프로바이더는 그대로 유지
+        'robots' => [
+            'driver' => 'eloquent',
+            'model' => App\Models\Robot::class,
+        ],
     ],
 
     'passwords' => [

@@ -3,6 +3,7 @@
 namespace App\Filament\Pages;
 
 use App\Helpers\RobotManager;
+use App\Models\Robot;
 use Filament\Actions;
 use Filament\Forms;
 use Filament\Forms\Form;
@@ -19,6 +20,7 @@ use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 use Filament\Forms\Concerns\InteractsWithForms;
 use Filament\Tables\Concerns\InteractsWithTable;
+use Livewire\Attributes\On; // ✨ REMOVED: 이제 필요하지 않을 수 있음 (기본 Livewire 동작에 의존)
 
 class RobotControl extends Page implements Tables\Contracts\HasTable
 {
@@ -30,12 +32,15 @@ class RobotControl extends Page implements Tables\Contracts\HasTable
     protected static string $view = 'filament.pages.robot-control';
     protected static ?string $title = '로봇 제어 및 관리';
 
-    public ?array $data = []; // 폼 필드 값을 바인딩할 속성
+    public ?array $data = [];
 
     public function mount(): void
     {
         $this->form->fill();
-        $this->fill(['data' => ['robotCountToGenerate' => 5, 'robotCountToStart' => 1]]);
+        $this->data = [
+            'robotCountToGenerate' => 5,
+            'robotCountToStart' => Robot::where('is_active', false)->count()
+        ];
     }
 
     protected function getForms(): array
@@ -47,8 +52,7 @@ class RobotControl extends Page implements Tables\Contracts\HasTable
         ];
     }
 
-    // ✨ NEW: 페이지 레벨의 액션 버튼들을 정의하는 메서드
-    protected function getActions(): array
+    protected function getHeaderActions(): array
     {
         return [
             Actions\Action::make('generateRobots')
@@ -58,8 +62,9 @@ class RobotControl extends Page implements Tables\Contracts\HasTable
                 ->action('generateRobotsAction')
                 ->requiresConfirmation()
                 ->modalHeading('로봇 계정을 생성하시겠습니까?')
-                ->modalDescription('이 작업은 지정된 개수만큼의 새로운 로봇 계정을 생성합니다. 이미 존재하는 이메일은 건너뜁니다.')
+                ->modalDescription('이 작업은 지정된 개수만큼의 새로운 로봇 계정을 생성합니다. 이미 존재하는 이메일의 로봇은 건너뛰며, 생성 후 아래 목록에 바로 반영됩니다.')
                 ->modalSubmitActionLabel('생성'),
+            // ✨ REMOVED: ->after(fn() => $this->dispatch('close-modal')) - 이제 Livewire가 자동으로 모달을 닫고 테이블을 새로고침합니다.
             Actions\Action::make('startRobots')
                 ->label('로봇 게임 시작')
                 ->color('primary')
@@ -69,6 +74,7 @@ class RobotControl extends Page implements Tables\Contracts\HasTable
                 ->modalHeading('로봇 게임을 시작하시겠습니까?')
                 ->modalDescription('지정된 수의 비활성 로봇이 게임 서버에 접속하여 게임에 참여합니다.')
                 ->modalSubmitActionLabel('시작'),
+            // ✨ REMOVED: ->after(fn() => $this->dispatch('close-modal'))
             Actions\Action::make('stopAllRobots')
                 ->label('모든 로봇 게임 정지')
                 ->color('danger')
@@ -78,15 +84,15 @@ class RobotControl extends Page implements Tables\Contracts\HasTable
                 ->modalHeading('모든 로봇을 정지하시겠습니까?')
                 ->modalDescription('이 작업은 되돌릴 수 없습니다. 모든 활성 로봇이 게임에서 퇴장합니다.')
                 ->modalSubmitActionLabel('정지'),
+            // ✨ REMOVED: ->after(fn() => $this->dispatch('close-modal'))
         ];
     }
 
     public function table(Table $table): Table
     {
         return $table
-            ->query(
-                \App\Models\User::query()->whereRaw('1 = 0') // 더미 쿼리
-            )
+            ->query(Robot::query())
+            // ✨ REMOVED: deferLoading() - Livewire 다운그레이드 후에는 불필요할 수 있습니다. 필요시 다시 추가하세요.
             ->columns([
                 Tables\Columns\TextColumn::make('id')
                     ->label('ID')
@@ -109,21 +115,21 @@ class RobotControl extends Page implements Tables\Contracts\HasTable
                     ->sortable(),
                 Tables\Columns\TextColumn::make('created_at')
                     ->label('생성일')
-                    ->dateTime()
+                    ->dateTime('m-d H:i', 'Asia/Seoul')
                     ->sortable(),
                 Tables\Columns\TextColumn::make('updated_at')
                     ->label('최종 수정일')
-                    ->dateTime()
+                    ->dateTime('m-d H:i', 'Asia/Seoul')
                     ->sortable(),
             ])
             ->filters([])
-            ->headerActions([]) // 헤더 액션 제거 (이미지상 '새 로봇 생성' 버튼이 여기에 해당했음)
+            ->headerActions([])
             ->actions([
                 Tables\Actions\ActionGroup::make([
                     Tables\Actions\EditAction::make()
                         ->label('수정')
-                        ->form(fn($record): array => static::getRobotFormSchema($record->toArray(), 'edit'))
-                        ->action(function (array $data, $record): void {
+                        ->form(fn(Robot $record): array => static::getRobotFormSchema($record, 'edit'))
+                        ->action(function (array $data, Robot $record): void {
                             try {
                                 if (isset($data['password']) && filled($data['password'])) {
                                     $data['password'] = Hash::make($data['password']);
@@ -131,116 +137,90 @@ class RobotControl extends Page implements Tables\Contracts\HasTable
                                     unset($data['password']);
                                 }
                                 unset($data['password_confirmation']);
-                                RobotManager::updateRobot($record->id, $data);
+
+                                $record->update($data);
                                 Notification::make()->title('로봇 업데이트 성공')->success()->send();
-                                $this->dispatch('$refresh');
                             } catch (\Exception $e) {
                                 Notification::make()->title('로봇 업데이트 실패')->body($e->getMessage())->danger()->send();
                             }
                         }),
+                    // ✨ REMOVED: ->after(fn() => $this->dispatch('close-modal'))
                     Tables\Actions\DeleteAction::make()
                         ->label('삭제')
-                        ->action(function ($record): void {
+                        ->action(function (Robot $record): void {
                             try {
-                                RobotManager::deleteRobot($record->email);
+                                $record->delete();
                                 Notification::make()->title('로봇 삭제 성공')->success()->send();
-                                $this->dispatch('$refresh');
                             } catch (\Exception | \Throwable $e) {
                                 Notification::make()->title('로봇 삭제 실패')->body($e->getMessage())->danger()->send();
                             }
                         }),
+                    // ✨ REMOVED: ->after(fn() => $this->dispatch('close-modal'))
                 ])
             ])
             ->bulkActions([
                 Tables\Actions\BulkActionGroup::make([
                     Tables\Actions\DeleteBulkAction::make()
                         ->action(function (Collection $records): void {
-                            foreach ($records as $record) {
-                                RobotManager::deleteRobot($record->email);
+                            try {
+                                $records->each(fn(Robot $robot) => $robot->delete());
+                                Notification::make()->title('선택된 로봇 삭제 성공')->success()->send();
+                            } catch (\Exception | \Throwable $e) {
+                                Notification::make()->title('로봇 삭제 실패')->body($e->getMessage())->danger()->send();
                             }
-                            Notification::make()->title('선택된 로봇 삭제 성공')->success()->send();
-                            $this->dispatch('$refresh');
                         }),
+                    // ✨ REMOVED: ->after(fn() => $this->dispatch('close-modal'))
                 ]),
             ])
             ->defaultSort('id', 'asc')
-            ->paginated([10, 25, 50, 'all']);
+            ->paginated([10, 25, 50, 100, 'all']);
     }
 
-    protected function paginateTableQuery(\Illuminate\Database\Eloquent\Builder $query): \Illuminate\Contracts\Pagination\LengthAwarePaginator
+    public static function getRobotFormSchema(Model|array|null $robotData = null, string $operation = 'create'): array
     {
-        $robots = collect(RobotManager::getRobots());
-        $search = $this->getTableSearch();
-        if (!empty($search)) {
-            $searchLower = strtolower($search);
-            $robots = $robots->filter(function ($robot) use ($searchLower) {
-                return Str::contains(strtolower($robot['name'] ?? ''), $searchLower) ||
-                    Str::contains(strtolower($robot['email'] ?? ''), $searchLower);
-            });
-        }
-        $sortColumn = $this->getTableSortColumn();
-        $sortDirection = $this->getTableSortDirection();
-        if ($sortColumn) {
-            $robots = $robots->sortBy($sortColumn, SORT_REGULAR, $sortDirection === 'desc')->values();
-        }
-        $models = $robots->map(function ($robotData) {
-            $model = new class extends Model {
-                protected $guarded = [];
-                public $exists = true;
-                public function getKey()
-                {
-                    return $this->id;
-                }
-            };
-            $model->fill($robotData);
-            return $model;
-        });
-        $page = $this->getTablePage();
-        $perPage = $this->getTableRecordsPerPage();
-        if ($perPage === 'all') {
-            $perPage = $models->count();
-        }
-        return new \Illuminate\Pagination\LengthAwarePaginator(
-            $models->forPage($page, $perPage),
-            $models->count(),
-            $perPage,
-            $page,
-            ['path' => request()->url()]
-        );
-    }
+        set_time_limit(300); // ✨ MODIFIED: 실행 시간 제한 300초로 증가 (로봇 생성)
+        $dataForDefaults = ($robotData instanceof Model) ? $robotData->toArray() : $robotData;
 
-    public static function getRobotFormSchema(?array $robotData = null, string $operation = 'create'): array
-    {
         return [
             Forms\Components\TextInput::make('name')
                 ->required()
                 ->maxLength(255)
                 ->label('로봇 이름')
-                ->default($robotData['name'] ?? null),
+                ->default($dataForDefaults['name'] ?? null),
             Forms\Components\TextInput::make('email')
                 ->email()
                 ->required()
                 ->maxLength(255)
                 ->label('이메일')
-                ->default($robotData['email'] ?? null)
+                ->default($dataForDefaults['email'] ?? null)
                 ->rules([
                     'required',
                     'email',
                     'max:255',
-                    function ($attribute, $value, $fail) use ($robotData, $operation) {
-                        $existingRobot = RobotManager::findRobotByEmail($value);
-                        if ($existingRobot && ($operation === 'create' || ($robotData && $existingRobot['id'] !== $robotData['id']))) {
+                    function ($attribute, $value, $fail) use ($dataForDefaults, $operation) {
+                        $existingRobot = Robot::where('email', $value)->first();
+                        if ($existingRobot && ($operation === 'create' || ($dataForDefaults && $existingRobot->id !== ($dataForDefaults['id'] ?? null)))) {
                             $fail('이미 존재하는 로봇 이메일입니다.');
                         }
                     },
                 ]),
             Forms\Components\TextInput::make('password')
                 ->password()
-                ->dehydrateStateUsing(fn(string $state): string => Hash::make($state))
-                ->dehydrated(fn(?string $state): bool => filled($state))
+                // ✨ MODIFIED: `dehydrateStateUsing` 클로저를 좀 더 명확하게 변경
+                ->dehydrateStateUsing(function (?string $state) use ($operation, $dataForDefaults): ?string {
+                    if (filled($state)) { // 입력된 비밀번호가 있으면 해싱
+                        return Hash::make($state);
+                    }
+                    // 수정 모드이고 비밀번호가 입력되지 않았으면 기존 비밀번호 유지 (null 반환)
+                    // 생성 모드에서는 비밀번호가 필수이므로 이 분기로 오지 않음
+                    return null;
+                })
+                // ✨ MODIFIED: `dehydrated`를 제거하거나, `nullable`로 설정하여 빈 비밀번호 처리
+                ->dehydrated(fn(?string $state): bool => filled($state)) // 기존 비밀번호 유지 시 필드 데이터를 제외
                 ->required(fn(): bool => $operation === 'create')
                 ->confirmed()
-                ->label('비밀번호'),
+                ->label('비밀번호')
+                ->hint($operation === 'edit' ? '비밀번호를 변경하려면 입력하세요.' : null),
             Forms\Components\TextInput::make('password_confirmation')
                 ->password()
                 ->required(fn(): bool => $operation === 'create')
@@ -250,11 +230,11 @@ class RobotControl extends Page implements Tables\Contracts\HasTable
                 ->required()
                 ->default(100000)
                 ->label('보유 칩')
-                ->default($robotData['points'] ?? 100000),
+                ->default($dataForDefaults['points'] ?? 100000),
             Forms\Components\Toggle::make('is_active')
                 ->label('활성 여부')
                 ->default(false)
-                ->default($robotData['is_active'] ?? false),
+                ->default($dataForDefaults['is_active'] ?? false),
         ];
     }
 
@@ -262,7 +242,7 @@ class RobotControl extends Page implements Tables\Contracts\HasTable
     {
         return [
             Forms\Components\Section::make('로봇 생성')
-                ->description('지정된 개수만큼의 로봇 계정을 생성합니다. 기존에 존재하는 이메일의 로봇은 건너뛰며, 생성 후 아래 목록에 바로 반영됩니다.')
+                ->description('지정된 개수만큼의 로봇 계정을 생성합니다. 기존에 존재하는 이메일의 로봇은 건너뛰며, 생성 후 아래 목록에 바로 반영됩니다. 로봇 이름은 "로봇N" 형태로 자동 생성됩니다.')
                 ->schema([
                     Forms\Components\TextInput::make('robotCountToGenerate')
                         ->numeric()
@@ -278,51 +258,17 @@ class RobotControl extends Page implements Tables\Contracts\HasTable
                     Forms\Components\TextInput::make('robotCountToStart')
                         ->numeric()
                         ->minValue(1)
-                        ->default(1)
+                        ->default(fn() => Robot::where('is_active', false)->count())
                         ->label('시작할 로봇 개수 (현재 비활성 로봇 중)')
                         ->required(),
                 ]),
         ];
     }
 
-    // ✨ NEW: 페이지 레벨의 액션 버튼들을 정의하는 메서드 (기존 getFormActions 이름 변경)
-    // 이 메서드에서 반환되는 액션들은 Blade 템플릿의 `$this->getActions()`에 의해 렌더링됩니다.
-    protected function getHeaderActions(): array
-    {
-        return [
-            Actions\Action::make('generateRobots')
-                ->label('로봇 계정 생성')
-                ->color('success')
-                ->icon('heroicon-o-sparkles')
-                ->action('generateRobotsAction')
-                ->requiresConfirmation()
-                ->modalHeading('로봇 계정을 생성하시겠습니까?')
-                ->modalDescription('이 작업은 지정된 개수만큼의 새로운 로봇 계정을 생성합니다. 이미 존재하는 이메일은 건너뜁니다.')
-                ->modalSubmitActionLabel('생성'),
-            Actions\Action::make('startRobots')
-                ->label('로봇 게임 시작')
-                ->color('primary')
-                ->icon('heroicon-o-play')
-                ->action('startRobotsAction')
-                ->requiresConfirmation()
-                ->modalHeading('로봇 게임을 시작하시겠습니까?')
-                ->modalDescription('지정된 수의 비활성 로봇이 게임 서버에 접속하여 게임에 참여합니다.')
-                ->modalSubmitActionLabel('시작'),
-            Actions\Action::make('stopAllRobots')
-                ->label('모든 로봇 게임 정지')
-                ->color('danger')
-                ->icon('heroicon-o-stop')
-                ->action('stopRobotsAction')
-                ->requiresConfirmation()
-                ->modalHeading('모든 로봇을 정지하시겠습니까?')
-                ->modalDescription('이 작업은 되돌릴 수 없습니다. 모든 활성 로봇이 게임에서 퇴장합니다.')
-                ->modalSubmitActionLabel('정지'),
-        ];
-    }
-
-
     public function generateRobotsAction(): void
     {
+        set_time_limit(120); // ✨ NEW: 실행 시간 제한 120초로 증가
+
         $count = $this->data['robotCountToGenerate'] ?? 0;
         if ($count <= 0) {
             Notification::make()->title('생성할 로봇 개수를 입력해주세요.')->danger()->send();
@@ -330,9 +276,13 @@ class RobotControl extends Page implements Tables\Contracts\HasTable
         }
 
         try {
-            $newRobots = RobotManager::generateRobots($count, 'bot', 'password');
-            Notification::make()->title(count($newRobots) . '개의 로봇이 생성(또는 스킵)되었습니다.')->success()->send();
-            $this->dispatch('$refresh');
+            $newRobots = RobotManager::generateRobots($count, '로봇', 'password');
+            Notification::make()->title($newRobots->count() . '개의 로봇이 생성(또는 스킵)되었습니다.')->success()->send();
+
+            // ✨ MODIFIED: 테이블 새로고침은 액션 성공 시 Filament가 자동으로 처리합니다.
+            // 대신, 폼 필드 업데이트를 위해 $this->fill()을 호출합니다.
+            $this->fill(['data' => ['robotCountToStart' => Robot::where('is_active', false)->count()]]);
+            // 또는 `$this->form->fill(['robotCountToStart' => Robot::where('is_active', false)->count()]);`
         } catch (\Exception $e) {
             Notification::make()->title('로봇 생성 실패')->body($e->getMessage())->danger()->send();
         }
@@ -340,6 +290,7 @@ class RobotControl extends Page implements Tables\Contracts\HasTable
 
     public function startRobotsAction(): void
     {
+        set_time_limit(300); // ✨ MODIFIED: 실행 시간 제한 300초로 증가 (로봇 생성)
         /** @var \App\Models\User|null $user */
         $user = Auth::user();
         if (!$user instanceof \App\Models\User) {
@@ -347,32 +298,33 @@ class RobotControl extends Page implements Tables\Contracts\HasTable
             return;
         }
 
-        $token = $user->createToken('robot-control-start', ['robot:control'])->plainTextToken;
         $robotCountToStart = $this->data['robotCountToStart'] ?? 1;
 
-        $inactiveRobots = collect(RobotManager::getRobots())
-            ->where('is_active', false)
+        $inactiveRobots = Robot::where('is_active', false)
             ->take($robotCountToStart)
-            ->values()
-            ->all();
+            ->get();
 
-        if (empty($inactiveRobots)) {
+        if ($inactiveRobots->isEmpty()) {
             Notification::make()->title('로봇 시작 실패')->body('시작할 비활성 로봇이 없습니다.')->danger()->send();
             return;
         }
 
         try {
             $response = Http::withHeaders([
-                'Authorization' => 'Bearer ' . $token,
-            ])->post(route('api.robot-control.start'), ['robots' => $inactiveRobots]);
+                'X-Game-Server-API-Secret' => config('services.game_server.api_secret'),
+            ])->post(env('GAME_SERVER_URL', 'http://localhost:3000') . '/api/robot-commands/start', [
+                'robots' => $inactiveRobots->toArray(),
+            ]);
 
             if ($response->successful()) {
                 Notification::make()->title('로봇 시작 명령 성공')->body($response->json('message'))->success()->send();
-                $this->dispatch('$refresh');
+                // ✨ MODIFIED: 테이블 새로고침은 액션 성공 시 Filament가 자동으로 처리합니다.
+                // 폼 필드 업데이트를 위해 $this->fill()을 호출합니다.
+                $this->fill(['data' => ['robotCountToStart' => Robot::where('is_active', false)->count()]]);
             } else {
                 Notification::make()->title('로봇 시작 명령 실패')->body($response->json('message') ?: $response->body())->danger()->send();
             }
-        } catch (\Exception $e) {
+        } catch (\Exception | \Throwable $e) {
             Log::error("Filament 로봇 시작 액션 중 예외 발생: {$e->getMessage()}");
             Notification::make()->title('로봇 시작 실패')->body($e->getMessage())->danger()->send();
         }
@@ -380,6 +332,7 @@ class RobotControl extends Page implements Tables\Contracts\HasTable
 
     public function stopRobotsAction(): void
     {
+        set_time_limit(300); // ✨ MODIFIED: 실행 시간 제한 300초로 증가 (로봇 생성)
         /** @var \App\Models\User|null $user */
         $user = Auth::user();
         if (!$user instanceof \App\Models\User) {
@@ -387,20 +340,20 @@ class RobotControl extends Page implements Tables\Contracts\HasTable
             return;
         }
 
-        $token = $user->createToken('robot-control-stop', ['robot:control'])->plainTextToken;
-
         try {
             $response = Http::withHeaders([
-                'Authorization' => 'Bearer ' . $token,
-            ])->post(route('api.robot-control.stop'));
+                'X-Game-Server-API-Secret' => config('services.game_server.api_secret'),
+            ])->post(env('GAME_SERVER_URL', 'http://localhost:3000') . '/api/robot-commands/stop');
 
             if ($response->successful()) {
                 Notification::make()->title('모든 로봇 정지 명령 성공')->body($response->json('message'))->success()->send();
-                $this->dispatch('$refresh');
+                // ✨ MODIFIED: 테이블 새로고침은 액션 성공 시 Filament가 자동으로 처리합니다.
+                // 폼 필드 업데이트를 위해 $this->fill()을 호출합니다.
+                $this->fill(['data' => ['robotCountToStart' => Robot::where('is_active', false)->count()]]);
             } else {
                 Notification::make()->title('모든 로봇 정지 명령 실패')->body($response->json('message') ?: $response->body())->danger()->send();
             }
-        } catch (\Exception $e) {
+        } catch (\Exception | \Throwable $e) {
             Log::error("Filament 로봇 정지 액션 중 예외 발생: {$e->getMessage()}");
             Notification::make()->title('로봇 정지 실패')->body($e->getMessage())->danger()->send();
         }

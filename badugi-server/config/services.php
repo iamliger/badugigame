@@ -31,4 +31,8 @@ return [
         'region' => env('AWS_DEFAULT_REGION', 'us-east-1'),
     ],
 
+    'game_server' => [
+        'api_secret' => env('GAME_SERVER_API_SECRET', 'your_game_server_api_secret'), // .env 파일에서 불러옵니다.
+    ],
+
 ];

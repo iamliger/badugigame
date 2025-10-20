@@ -2,16 +2,34 @@
 
 import { io } from "socket.io-client";
 import axios from 'axios';
-import { logDebug, warnDebug, errorDebug } from '../../server.js'; // 서버 로거 임포트
+import { logDebug, warnDebug, errorDebug } from '../../logger.js';
+
+// ✨ NEW: dotenv를 직접 임포트하여 이 파일에서 환경 변수를 사용하도록 합니다.
+import dotenv from 'dotenv';
+dotenv.config({ path: './.env' }); // ✨ MODIFIED: RobotController.js에서도 .env 경로 명시
 
 // 봇이 사용할 라라벨 API URL (로그인 등)
 const LARAVEL_API_URL = process.env.LARAVEL_API_URL || 'http://localhost:8000/api/auth';
-const GAME_SERVER_URL = process.env.GAME_SERVER_URL || 'http://localhost:3000'; // 봇이 연결할 게임 서버 URL
+const LARAVEL_ROBOT_LOGIN_API_URL = process.env.LARAVEL_ROBOT_LOGIN_API_URL || 'http://localhost:8000/api/robot-auth/login';
+const GAME_SERVER_URL = process.env.GAME_SERVER_URL || 'http://localhost:3000';
+
+// ✨ NEW: RobotController 로드 시점의 환경 변수 상태 확인 로그
+logDebug(`[RobotController Init] LARAVEL_ROBOT_LOGIN_API_URL: ${LARAVEL_ROBOT_LOGIN_API_URL}`);
+logDebug(`[RobotController Init] GAME_SERVER_URL for bot connections: ${GAME_SERVER_URL}`);
+
+if (!process.env.LARAVEL_ROBOT_LOGIN_API_URL) {
+    errorDebug('[RobotController] WARN: LARAVEL_ROBOT_LOGIN_API_URL is still not defined after dotenv.config() in RobotController.');
+}
+
+// ✨ NEW: GAME_SERVER_URL이 정의되지 않았을 경우 경고/오류 추가
+if (!process.env.GAME_SERVER_URL) {
+    errorDebug('[RobotController] WARN: GAME_SERVER_URL is NOT defined in RobotController after dotenv.config().');
+}
 
 class RobotController {
     constructor(gameService, activeBots) {
         this.gameService = gameService;
-        this.activeBots = activeBots; // { userId: socketInstance }
+        this.activeBots = activeBots;
 
         this.startRobots = this.startRobots.bind(this);
         this.stopRobots = this.stopRobots.bind(this);
@@ -34,15 +52,21 @@ class RobotController {
 
         let token = '';
         try {
-            // Laravel 인증 API를 호출하여 토큰 획득
-            const loginResponse = await axios.post(`${LARAVEL_API_URL}/login`, {
+            // ✨ 환경 변수가 여기에 도달하는지 다시 확인
+            if (!LARAVEL_ROBOT_LOGIN_API_URL) {
+                errorDebug('[RobotController] FATAL: LARAVEL_ROBOT_LOGIN_API_URL is UNDEFINED at connectBot execution.');
+                throw new Error('LARAVEL_ROBOT_LOGIN_API_URL is not defined in RobotController.');
+            }
+
+            // Laravel 로봇 인증 API를 호출하여 Sanctum 토큰 획득
+            const loginResponse = await axios.post(LARAVEL_ROBOT_LOGIN_API_URL, {
                 email: email,
-                password: 'password' // Laravel RobotManager에서 Hash::make('password')로 저장했으므로, 실제 비밀번호는 'password'
+                password: 'password'
             });
             token = loginResponse.data.access_token;
-            logDebug(`[RobotController] 로봇 ${userName} 로그인 성공. 토큰 획득.`);
+            logDebug(`[RobotController] 로봇 ${userName} 로그인 성공. 토큰 획득. 칩: ${points}. 토큰 시작: ${token.substring(0, 20)}...`);
         } catch (error) {
-            errorDebug(`[RobotController] 로봇 ${userName} 로그인 실패:`, error.response?.data || error.message);
+            errorDebug(`[RobotController] 로봇 ${userName} 로그인 실패:`, error.response?.data || error.message || `No response from ${LARAVEL_ROBOT_LOGIN_API_URL}`);
             return null;
         }
 
@@ -50,12 +74,12 @@ class RobotController {
             auth: { token: token },
             autoConnect: false,
             transports: ['websocket'],
-            query: { isBot: true } // 봇임을 식별하기 위한 쿼리 파라미터 (선택 사항)
+            query: { isBot: true }
         });
 
         socket.userId = userId;
         socket.userName = userName;
-        socket.userChips = points; // 로봇의 초기 칩 설정
+        socket.userChips = points; // Laravel에서 전달받은 초기 칩 사용
         socket.currentRoomId = null;
         socket.currentHand = [];
         socket.roomState = null;
@@ -63,13 +87,13 @@ class RobotController {
         // --- Socket 이벤트 핸들러 ---
         socket.on('connect', () => {
             logDebug(`[Robot ${socket.userName}] Socket.IO 연결 성공. ID: ${socket.id}`);
-            this.activeBots[userId] = socket; // 활성 봇 목록에 추가
-            socket.emit('getRooms'); // 방 목록 요청
+            this.activeBots[userId] = socket;
+            socket.emit('getRooms');
         });
 
         socket.on('disconnect', (reason) => {
             logDebug(`[Robot ${socket.userName}] Socket.IO 연결 해제: ${reason}`);
-            delete this.activeBots[userId]; // 연결 해제 시 활성 봇 목록에서 제거
+            delete this.activeBots[userId];
         });
 
         socket.on('connect_error', (err) => {
@@ -77,15 +101,14 @@ class RobotController {
         });
 
         socket.on('roomsUpdated', (rooms) => {
-            // console.log(`[Robot ${socket.userName}] 방 목록 업데이트 수신 (${rooms.length}개)`);
-            if (!socket.currentRoomId) { // 아직 방에 입장하지 않았다면
+            // ... 기존 로직과 동일 ...
+            if (!socket.currentRoomId) {
                 let availableRoom = rooms.find(r => r.status === 'waiting' && r.players < r.maxPlayers && !r.isPrivate);
                 if (availableRoom) {
                     socket.emit('joinRoom', { roomId: availableRoom.id, initialChips: socket.userChips }, (response) => {
                         if (response.success) {
                             logDebug(`[Robot ${socket.userName}] 방 ${availableRoom.name} (${availableRoom.id}) 입장 성공.`);
                             socket.currentRoomId = availableRoom.id;
-                            // 방장 로봇인 경우 게임 시작 시도
                             if (response.room.creatorId === socket.userId && response.room.players.length >= 2) {
                                 socket.emit('startGame', availableRoom.id, (startRes) => {
                                     if (startRes.success) {
@@ -101,7 +124,10 @@ class RobotController {
                     });
                 } else {
                     // 방이 없으면 방 만들기 시도 (가장 낮은 ID 봇만 방 만들도록)
-                    if (userId === Math.min(...Object.keys(this.activeBots).map(Number))) { // 가장 낮은 ID를 가진 활성 봇만 방 생성
+                    // 이 로직은 Filament에서 시작된 봇들이 동시에 실행될 때,
+                    // 가장 낮은 ID를 가진 봇만 방을 만들도록 하는 것이 좋습니다.
+                    const activeBotIds = Object.keys(this.activeBots).map(Number);
+                    if (activeBotIds.length > 0 && userId === Math.min(...activeBotIds)) {
                         socket.emit('createRoom', { name: `${socket.userName}의 방`, betAmount: 100 }, (response) => {
                             if (response.success) {
                                 logDebug(`[Robot ${socket.userName}] 방 생성 성공: ${response.room.name} (${response.room.id})`);
@@ -125,8 +151,6 @@ class RobotController {
         socket.on('roomUpdated', (roomState) => {
             if (roomState.id === socket.currentRoomId) {
                 socket.roomState = roomState;
-                // console.log(`[Bot ${socket.userName}] 방 ${roomState.name} 상태 업데이트. 턴: ${roomState.currentTurnPlayerId}`);
-                // 방장이 된 로봇이 게임 시작 조건 충족 시 자동 시작
                 if (roomState.creatorId === socket.userId && roomState.status === 'waiting' && roomState.players.length >= 2) {
                     socket.emit('startGame', roomState.id, (startRes) => {
                         if (startRes.success) {
@@ -147,24 +171,22 @@ class RobotController {
 
         socket.on('myHandUpdated', (data) => {
             socket.currentHand = data.hand;
-            // console.log(`[Bot ${socket.userName}] 내 패 업데이트. 새 패: ${socket.currentHand.map(c => `${c.suit}${c.rank}`).join(', ')}`);
         });
 
         socket.on('turnChanged', (data) => {
             if (data.currentPlayerId === socket.userId && socket.roomState?.status === 'playing') {
                 logDebug(`[Robot ${socket.userName}] 내 턴! 남은 시간: ${data.timeLeft}초. 현재 페이즈: ${socket.roomState.currentPhase}`);
                 setTimeout(() => {
-                    this.takeBotAction(socket); // `this` 컨텍스트 유지
-                }, Math.random() * 2000 + 1000); // 1~3초 랜덤 대기 후 액션
+                    this.takeBotAction(socket);
+                }, Math.random() * 2000 + 1000);
             }
         });
 
         socket.on('gameEnded', (data) => {
             logDebug(`[Robot ${socket.userName}] 게임 종료! 승자: ${data.winnerNames.join(', ')}. 이유: ${data.reason}`);
-            socket.currentRoomId = null; // 방에서 나갔다고 가정
+            socket.currentRoomId = null;
             socket.currentHand = [];
             socket.roomState = null;
-            // 게임 종료 후 다시 로비로 가서 방 찾기
             setTimeout(() => socket.emit('getRooms'), 5000);
         });
         // --- Socket 이벤트 핸들러 끝 ---
@@ -173,6 +195,7 @@ class RobotController {
         return socket;
     }
 
+    // ... (takeBotAction, startRobots, stopRobots 메서드는 변경 없음) ...
     /**
      * 봇의 게임 액션을 처리합니다.
      * @param {Socket} socket - 봇의 소켓 인스턴스
@@ -189,7 +212,7 @@ class RobotController {
             });
             return;
         }
-        if (myPlayer.chips <= 0 && room.currentPhase === 'betting' && room.currentBet > 0) { // 베팅 페이즈이고 칩이 없는데 베팅이 필요한 경우
+        if (myPlayer.chips <= 0 && room.currentPhase === 'betting' && room.currentBet > 0) {
             socket.emit('playerAction', { roomId: room.id, action: 'die', amount: 0 }, (res) => {
                 if (res.success) logDebug(`[Robot ${socket.userName}] 칩 부족으로 자동 다이!`);
                 else warnDebug(`[Robot ${socket.userName}] 칩 부족 자동 다이 실패: ${res.message}`);
@@ -209,30 +232,25 @@ class RobotController {
             const isMyFirstActionInRound = !room.players.some(p => p.hasActedInBettingRound);
             const hasOtherPlayersActedInRound = room.players.some(p => p.id !== socket.userId && p.hasActedInBettingRound);
 
-            // 다이 (항상 가능하지만, 전략적으로)
-            actions.push({ action: 'die', prob: 0.05 }); // 5% 확률로 다이
+            actions.push({ action: 'die', prob: 0.05 });
 
-            // 체크
             if (currentHighestBet === 0 && isMyFirstActionInRound) {
-                actions.push({ action: 'check', prob: 0.4 }); // 첫 액션이면 체크 확률 높임
+                actions.push({ action: 'check', prob: 0.4 });
             }
 
-            // 콜(0)
             if (currentHighestBet === 0 && !isMyFirstActionInRound && hasOtherPlayersActedInRound) {
-                actions.push({ action: 'call', amount: 0, prob: 0.4 }); // 상대가 체크했으면 콜(0)
+                actions.push({ action: 'call', amount: 0, prob: 0.4 });
             }
 
-            // 콜 (금액) 또는 올인 콜
             const chipsToCall = currentHighestBet - myCurrentRoundBet;
             if (currentHighestBet > 0 && chipsToCall > 0) {
                 if (chips >= chipsToCall) {
-                    actions.push({ action: 'call', amount: currentHighestBet, prob: 0.3 }); // 일반 콜
-                } else { // 올인 콜
-                    actions.push({ action: 'call', amount: currentHighestBet, prob: 0.7 }); // 올인 콜은 높은 확률로
+                    actions.push({ action: 'call', amount: currentHighestBet, prob: 0.3 });
+                } else {
+                    actions.push({ action: 'call', amount: currentHighestBet, prob: 0.7 });
                 }
             }
 
-            // 삥 (bet)
             let targetBbingAmount = 0;
             if (currentHighestBet === 0) {
                 targetBbingAmount = betAmount;
@@ -241,21 +259,19 @@ class RobotController {
             }
             const chipsToPayForBbing = targetBbingAmount - myCurrentRoundBet;
             if (chipsToPayForBbing > 0 && chips >= chipsToPayForBbing) {
-                actions.push({ action: 'bet', amount: targetBbingAmount, prob: 0.1 }); // 삥
+                actions.push({ action: 'bet', amount: targetBbingAmount, prob: 0.1 });
             }
 
-            // 레이즈 (하프/풀)
             const pot = room.pot;
             const minRaiseUnit = room.betAmount;
 
-            // 하프 레이즈
             let halfRaiseTotal = Math.max(currentHighestBet === 0 ? minRaiseUnit : currentHighestBet + minRaiseUnit,
                 currentHighestBet + Math.floor(pot / 2));
             let chipsToPayHalf = halfRaiseTotal - myCurrentRoundBet;
             if (chipsToPayHalf > 0 && chips >= chipsToPayHalf && halfRaiseTotal > currentHighestBet) {
                 actions.push({ action: 'raise', amount: halfRaiseTotal, prob: 0.05 });
             }
-            // 풀 레이즈
+
             let fullRaiseTotal = Math.max(currentHighestBet === 0 ? minRaiseUnit : currentHighestBet + minRaiseUnit,
                 currentHighestBet + pot);
             let chipsToPayFull = fullRaiseTotal - myCurrentRoundBet;
@@ -264,20 +280,16 @@ class RobotController {
             }
 
         }
-        // 교환 페이즈
         else if (room.currentPhase === 'exchange' && myPlayer.canExchange) {
-            // 스테이
-            actions.push({ action: 'stay', cardsToExchange: [], prob: 0.5 }); // 50% 확률로 스테이
+            actions.push({ action: 'stay', cardsToExchange: [], prob: 0.5 });
 
-            // 카드 교환 (무작위로 0~3장 교환 시도)
-            const numToExchange = Math.floor(Math.random() * 4); // 0, 1, 2, 3장
+            const numToExchange = Math.floor(Math.random() * 4);
             if (numToExchange > 0 && socket.currentHand.length >= numToExchange) {
                 const cardsToExchange = [...socket.currentHand].sort(() => 0.5 - Math.random()).slice(0, numToExchange).map(c => c.id);
                 actions.push({ action: 'exchange', cardsToExchange: cardsToExchange, prob: 0.5 });
             }
         }
 
-        // 확률 기반으로 액션 선택
         const totalProb = actions.reduce((sum, a) => sum + (a.prob || 0), 0);
         let randomNum = Math.random() * totalProb;
         let chosenAction = null;
@@ -290,7 +302,7 @@ class RobotController {
             }
         }
 
-        if (!chosenAction) { // 기본 액션 ( fallback: 다이 또는 스테이)
+        if (!chosenAction) {
             chosenAction = { action: (room.currentPhase === 'betting' ? 'die' : 'stay'), amount: 0, cardsToExchange: [] };
         }
 
@@ -303,7 +315,6 @@ class RobotController {
             cardsToExchange: chosenAction.cardsToExchange
         }, (response) => {
             if (response.success) {
-                // console.log(`[Bot ${socket.userName}] 액션 ${chosenAction.action} 성공.`);
             } else {
                 warnDebug(`[Robot ${socket.userName}] 액션 ${chosenAction.action} 실패: ${response.message}`);
             }
@@ -316,7 +327,7 @@ class RobotController {
      * @param {Response} res
      */
     async startRobots(req, res) {
-        const { robots } = req.body; // 라라벨에서 전달받은 로봇 정보 배열
+        const { robots } = req.body;
 
         if (!robots || robots.length === 0) {
             return res.status(400).json({ message: '시작할 로봇 정보가 없습니다.' });
@@ -325,7 +336,9 @@ class RobotController {
         const startedRobotIds = [];
         for (const robotData of robots) {
             try {
-                const botSocket = await this.connectBot(robotData);
+                // `robotData.password`는 Filament에서 해싱되지 않은 'password' 문자열로 넘어와야 합니다.
+                // Laravel RobotManager에서 'password'로 해싱했으므로, 여기서도 'password'로 사용합니다.
+                const botSocket = await this.connectBot({ ...robotData, password: 'password' }); // ✨ FIX: 해싱되지 않은 'password'를 전달
                 if (botSocket) {
                     startedRobotIds.push(robotData.id);
                 }
@@ -343,16 +356,16 @@ class RobotController {
      * @param {Response} res
      */
     stopRobots(req, res) {
-        const { robotIds } = req.body; // 라라벨에서 전달받은 정지할 로봇 ID 목록 (없으면 전체 정지)
+        const { robotIds } = req.body;
 
         let stoppedRobotIds = [];
-        if (!robotIds || robotIds.length === 0) { // 모든 로봇 정지
+        if (!robotIds || robotIds.length === 0) {
             for (const userId in this.activeBots) {
                 this.activeBots[userId].disconnect();
                 stoppedRobotIds.push(parseInt(userId));
             }
-            this.activeBots = {}; // 맵 초기화
-        } else { // 특정 로봇 정지
+            this.activeBots = {};
+        } else {
             for (const id of robotIds) {
                 if (this.activeBots[id]) {
                     this.activeBots[id].disconnect();

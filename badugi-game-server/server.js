@@ -1,47 +1,41 @@
 // badugi-game-server/server.js
-import RobotController from './src/controllers/RobotController.js';
+
 // 📦 ESM 방식으로 모듈 임포트
 import dotenv from 'dotenv';
+dotenv.config({ path: '.env' }); // .env 파일 경로를 명시적으로 지정하여 로드 시도
+
+// ✨ MODIFIED: 로깅 함수를 logger.js에서 임포트
+import { logDebug, warnDebug, errorDebug } from './logger.js';
+
 import express from 'express';
 import { createServer } from 'http';
 import { Server as SocketIOServer } from 'socket.io';
 import cors from 'cors';
 import jwt from 'jsonwebtoken';
+import axios from 'axios';
 
 // 🃏 게임 서비스 임포트 (상대 경로로 ESM 방식)
 import { GameService } from './src/services/GameService.js'; // .js 확장자 필수!
-
-// 🚀 dotenv 설정 로드
-dotenv.config();
+import RobotController from './src/controllers/RobotController.js'; // RobotController 임포트
 
 const app = express();
 const server = createServer(app);
 
-const DEBUG_MODE = process.env.DEBUG === 'true';
+// ✨ REMOVED: 기존 로깅 함수 정의는 logger.js로 이동했으므로 제거합니다.
+// export function logDebug(...args) { ... }
+// export function warnDebug(...args) { ... }
+// export function errorDebug(...args) { ... }
 
-// ✍️ 로깅 함수 정의 (서버 전역에서 사용, GameService에서도 import하여 사용)
-export function logDebug(...args) {
-    if (DEBUG_MODE) {
-        console.log('[SERVER-DEBUG]', ...args);
-    }
-}
-export function warnDebug(...args) {
-    if (DEBUG_MODE) {
-        console.warn('[SERVER-WARN]', ...args);
-    }
-}
-export function errorDebug(...args) {
-    console.error('[SERVER-ERROR]', ...args);
-}
+// ✨ REMOVED: DEBUG_MODE 변수는 logger.js 내부에서 관리됩니다.
+// const DEBUG_MODE = process.env.DEBUG === 'true';
 
 const PORT = process.env.PORT || 3000;
 const CORS_ORIGIN = process.env.CORS_ORIGIN ? process.env.CORS_ORIGIN.split(',') : ['http://localhost:8000', 'http://127.0.0.1:8000', 'http://localhost:5173'];
-const JWT_SECRET = process.env.JWT_SECRET;
 const TURN_TIME_LIMIT = parseInt(process.env.TURN_TIME_LIMIT || '30');
-const GAME_SERVER_API_SECRET = process.env.GAME_SERVER_API_SECRET; // ✨ NEW: .env에서 API Secret 로드
+const GAME_SERVER_API_SECRET = process.env.GAME_SERVER_API_SECRET;
 
 app.use(cors({ origin: CORS_ORIGIN, credentials: true }));
-app.use(express.json()); // ✨ NEW: JSON 요청 바디 파싱을 위해 추가
+app.use(express.json());
 
 // ✨ NEW: 게임 서버 API Secret 검증 미들웨어
 const authenticateGameServerApi = (req, res, next) => {
@@ -62,8 +56,92 @@ const io = new SocketIOServer(server, {
     }
 });
 
-// 🔒 Socket.IO JWT 인증 미들웨어
-io.use((socket, next) => {
+// ✨ 환경 변수 로드 성공 여부 디버깅을 위한 즉각적인 로그 추가
+logDebug(`[dotenv] JWT_SECRET: ${process.env.JWT_SECRET ? 'Yes' : 'No'}`);
+logDebug(`[dotenv] LARAVEL_ROBOT_LOGIN_API_URL: ${process.env.LARAVEL_ROBOT_LOGIN_API_URL ? 'Yes' : 'No'}`);
+
+const JWT_SECRET = process.env.JWT_SECRET;
+if (!JWT_SECRET) {
+    errorDebug('경고: JWT_SECRET이 설정되지 않았습니다. .env 파일을 확인해주세요! (Laravel Tymon/JWTAuth 키 값으로 설정)');
+}
+
+const LARAVEL_USER_AUTH_CHECK_TOKEN_URL = process.env.LARAVEL_USER_AUTH_CHECK_TOKEN_URL || 'http://localhost:8000/api/auth/check-token';
+const LARAVEL_ROBOT_AUTH_CHECK_TOKEN_URL = process.env.LARAVEL_ROBOT_AUTH_CHECK_TOKEN_URL || 'http://localhost:8000/api/robot-auth/check-token';
+
+// 각 함수는 성공 시 인증된 entity 객체를 resolve하고, 실패 시 error 객체를 reject합니다.
+async function tryAuthenticateRobot(socketId, token) {
+    const parts = token.split('|');
+    const isSanctumTokenFormat = (parts.length === 2 && !isNaN(parseInt(parts[0])));
+
+    if (!isSanctumTokenFormat) {
+        throw new Error('RobotAuth: Token is not in expected Sanctum format (ID|TOKEN).');
+    }
+
+    try {
+        const robotResponse = await axios.post(LARAVEL_ROBOT_AUTH_CHECK_TOKEN_URL, {}, {
+            headers: { 'Authorization': `Bearer ${token}` }
+        });
+
+        if (robotResponse.data.status === 'success' && robotResponse.data.robot) {
+            const robot = robotResponse.data.robot;
+            logDebug(`[AUTH] Socket ID: ${socketId}, 인증 성공 (로봇 API) - 로봇 ID: ${robot.id}, 이름: ${robot.name}`);
+            return {
+                id: parseInt(robot.id),
+                name: robot.name || `Robot${robot.id}`,
+                isRobot: true,
+                email: robot.email,
+                points: robot.points,
+            };
+        } else {
+            throw new Error(robotResponse.data.error || 'RobotAuth: API verification failed.');
+        }
+    } catch (robotErr) {
+        const status = robotErr.response?.status || 'network error';
+        const dataError = robotErr.response?.data?.error || '';
+        const message = robotErr.message;
+        throw new Error(`RobotAuth: API call failed (Status: ${status}): ${dataError || message}`);
+    }
+}
+
+async function tryAuthenticateUser(socketId, token) {
+    if (!JWT_SECRET) {
+        throw new Error('UserAuth: Server configuration error: JWT_SECRET not set.');
+    }
+
+    const isJwtAuthTokenFormat = (token.split('.').length === 3);
+
+    if (!isJwtAuthTokenFormat) {
+        throw new Error('UserAuth: Token is not in expected JWTAuth format (header.payload.signature).');
+    }
+
+    try {
+        const decoded = jwt.verify(token, JWT_SECRET);
+        const userResponse = await axios.post(LARAVEL_USER_AUTH_CHECK_TOKEN_URL, {}, {
+            headers: { 'Authorization': `Bearer ${token}` }
+        });
+
+        if (userResponse.data.status === 'success' && userResponse.data.user) {
+            const user = userResponse.data.user;
+            logDebug(`[AUTH] Socket ID: ${socketId}, 인증 성공 (사용자 API) - 사용자 ID: ${user.id}, 이름: ${user.name}`);
+            return {
+                id: parseInt(user.id),
+                name: user.name || `User${user.id}`,
+                isRobot: false,
+                email: user.email,
+                points: user.points,
+            };
+        } else {
+            throw new Error(userResponse.data.error || 'UserAuth: API verification failed.');
+        }
+    } catch (userJwtErr) {
+        throw new Error(`UserAuth: JWT verification failed: ${userJwtErr.message}`);
+    }
+}
+// --- 인증 시도 헬퍼 함수 정의 끝 ---
+
+
+// 🔒 Socket.IO 토큰 인증 미들웨어
+io.use(async (socket, next) => {
     const token = socket.handshake.auth.token;
 
     if (!token) {
@@ -71,22 +149,45 @@ io.use((socket, next) => {
         return next(new Error('Authentication error: Token not provided'), { message: 'Authentication error: Token not provided' });
     }
 
-    try {
-        const decoded = jwt.verify(token, JWT_SECRET);
-        socket.user = {
-            id: parseInt(decoded.sub),
-            name: decoded.name || `User${decoded.sub}`
-        };
-        logDebug(`[AUTH] Socket ID: ${socket.id}, 인증 성공 - User ID: ${socket.user.id}, Name: ${socket.user.name}`);
-        next();
-    } catch (err) {
-        errorDebug(`[AUTH] Socket ID: ${socket.id}, 인증 실패 - ${err.message}`);
-        if (err.name === 'TokenExpiredError') {
-            return next(new Error('Authentication error: Token expired. Please re-login.'), { message: 'Authentication error: Token expired: Please re-login.' });
-        }
-        return next(new Error('Authentication error: Invalid token'));
+    if (!JWT_SECRET) {
+        errorDebug(`[AUTH] Socket ID: ${socket.id} - JWT_SECRET이 설정되지 않아 JWTAuth 토큰 검증 불가. 이 오류는 수정되어야 합니다.`);
+        return next(new Error('Server configuration error: JWT_SECRET not set.'), { message: 'Server configuration error: JWT_SECRET not set.' });
     }
+
+    let authenticatedEntity = null;
+    let errorsDuringAttempts = []; // 시도 중 발생한 모든 에러 메시지
+
+    // 1단계: 로봇 (Sanctum) 토큰으로 인증 시도
+    try {
+        authenticatedEntity = await tryAuthenticateRobot(socket.id, token);
+        // 성공하면 즉시 다음 미들웨어로 넘어가고 함수 종료
+        socket.user = authenticatedEntity;
+        return next();
+    } catch (err) {
+        // 로봇 인증 실패, 에러 메시지 기록 후 다음 시도로 진행
+        errorsDuringAttempts.push(err.message);
+    }
+
+    // 2단계: 일반 사용자 (JWTAuth) 토큰으로 인증 시도 (로봇 인증 실패 시만)
+    try {
+        authenticatedEntity = await tryAuthenticateUser(socket.id, token);
+        // 성공하면 즉시 다음 미들웨어로 넘어가고 함수 종료
+        socket.user = authenticatedEntity;
+        return next();
+    } catch (err) {
+        // 사용자 인증 실패, 에러 메시지 기록
+        errorsDuringAttempts.push(err.message);
+    }
+
+    // 모든 인증 시도가 실패했을 경우 최종 에러 처리
+    const finalErrorMessage = errorsDuringAttempts.length > 0
+        ? errorsDuringAttempts.join('; ')
+        : "Unknown authentication failure after all attempts.";
+
+    errorDebug(`[AUTH] Socket ID: ${socket.id}, 최종 인증 실패 - ${finalErrorMessage}`);
+    return next(new Error(`Authentication error: ${finalErrorMessage}`), { message: `Authentication error: ${finalErrorMessage}` });
 });
+
 
 // --- 🎮 게임 로직 관련 임시 데이터 저장소 ---
 const rooms = {};
@@ -502,6 +603,9 @@ server.listen(PORT, () => {
     logDebug(`JWT Secret 로드됨: ${JWT_SECRET ? 'Yes' : 'No'}`);
     logDebug(`턴 시간 제한 (TURN_TIME_LIMIT): ${TURN_TIME_LIMIT}초`);
     logDebug(`게임 서버 API Secret 로드됨: ${GAME_SERVER_API_SECRET ? 'Yes' : 'No'}`);
+    logDebug(`Laravel 일반 사용자 토큰 검증 URL: ${LARAVEL_USER_AUTH_CHECK_TOKEN_URL}`);
+    logDebug(`Laravel 로봇 토큰 검증 URL: ${LARAVEL_ROBOT_AUTH_CHECK_TOKEN_URL}`);
+    logDebug(`Laravel 로봇 로그인 API URL (from server.js startup): ${process.env.LARAVEL_ROBOT_LOGIN_API_URL ? 'Yes' : 'No'}`);
     if (!JWT_SECRET) {
         errorDebug('경고: JWT_SECRET이 설정되지 않았습니다. .env 파일을 확인해주세요!');
     }

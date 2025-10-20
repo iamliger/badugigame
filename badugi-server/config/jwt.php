@@ -9,7 +9,7 @@ return [
     ],
     'ttl' => env('JWT_TTL', 120),
     'refresh_ttl' => env('JWT_REFRESH_TTL', 20160),
-    'algo' => env('JWT_ALGO', Tymon\JWTAuth\Providers\JWT\Provider::ALGO_HS256),
+    'algo' => env('JWT_ALGO', 'HS256'),
     'required_claims' => [
         'iss',
         'iat',
@@ -17,6 +17,10 @@ return [
         'nbf',
         'sub',
         'jti',
+    ],
+
+    'defaults' => [
+        'guard' => 'api', // ✨ 중요: 'api' 가드로 설정되어 있어야 합니다.
     ],
 
     'persistent_claims' => [

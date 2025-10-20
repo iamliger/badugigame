@@ -79,7 +79,7 @@
               <button @click="handlePlayerAction('check')" class="btn btn-primary ml-2" :disabled="!canCheck">체크</button>
                 <button @click="handlePlayerAction('call', myChipsToPayForCall)" class="btn btn-primary ml-2" :disabled="!canCall">
                     <span v-if="myChipsToPayForCall > 0">콜 ({{ myChipsToPayForCall }})</span>
-                    <span v-else>콜 (0)</span> <!-- ✨ FIX: 콜(0)일 경우 텍스트 명확화 -->
+                    <span v-else>콜 (0)</span>
                 </button>
                 <button @click="handlePlayerAction('bet', myTargetTotalBetForBbing)" class="btn btn-info ml-2" :disabled="!canBbing">삥 ({{ myChipsToPayForBbing }})</button>
                 <button @click="handlePlayerAction('raise', getRaiseAmountForHalf)" class="btn btn-info ml-2" :disabled="!canRaiseToHalf">하프 ({{ calculateChipsNeededForTotalBet(getRaiseAmountForHalf) }})</button>
@@ -90,7 +90,7 @@
             <!-- 교환 페이즈 버튼 - canExchange가 true일 때만 표시 -->
             <template v-else-if="currentPhase === 'exchange' && myPlayer?.canExchange">
                 <button @click="handlePlayerAction('exchange', selectedCardsIds)" class="btn btn-warning ml-2" :disabled="!canExchangeCards">카드 교환 ({{ selectedCardsIds.length }}장)</button>
-                <button @click="handlePlayerAction('stay', [])" class="btn btn-light ml-2" :disabled="!canStay">스테이</button> <!-- ✨ FIX: 스테이 시 빈 배열을 payload로 전달 -->
+                <button @click="handlePlayerAction('stay', [])" class="btn btn-light ml-2" :disabled="!canStay">스테이</button>
             </template>
 
             <!-- 교환 페이즈지만 이미 액션한 경우 대기 메시지 -->
@@ -315,7 +315,7 @@ const canCheck = computed(() => {
     // 규칙: room.currentBet이 0인 상태에서 내가 라운드의 첫 번째 액션 플레이어일 때만 체크 가능
     return canBettingPhaseAction.value &&
            room.value.currentBet === 0 &&
-           isMyFirstActionInRound.value; // ✨ MODIFIED: 내가 라운드의 첫 액션 플레이어인지 명확히 확인
+           isMyFirstActionInRound.value;
 });
 
 const myChipsToPayForCall = computed(() => {
@@ -324,43 +324,32 @@ const myChipsToPayForCall = computed(() => {
     const myCurrentRoundBet = myPlayer.value?.currentRoundBet || 0;
     const currentHighestBet = room.value.currentBet;
 
-    // ✨ FIX: 사용자 규칙에 따라 currentBet이 0이면 콜 금액도 0입니다 (콜(0))
     if (currentHighestBet === 0) {
-        return 0; // 콜(0)
+        return 0;
     }
 
     const chipsToPay = currentHighestBet - myCurrentRoundBet;
-    // 플레이어의 칩이 부족할 경우, 남은 칩 전부를 낼 수 있도록 Math.min 적용 (올인 콜)
     return chipsToPay > 0 ? Math.min(chipsToPay, myPlayer.value?.chips || 0) : 0;
 });
 
 
 const canCall = computed(() => {
-    // 규칙:
-    // 1. 내가 첫 액션 플레이어이면서 currentBet이 0이면 콜 불가 (체크/삥/레이즈만 가능)
-    // 2. currentBet이 0인데 내가 첫 액션이 아니면 (즉, 다른 플레이어가 체크했을 때) 콜(0) 가능
-    // 3. currentBet이 0보다 크면, 콜할 칩이 충분할 때 가능 (올인 콜 포함)
-
     if (!canBettingPhaseAction.value) return false;
 
     const myChips = myPlayer.value?.chips || 0;
-    const chipsToPay = myChipsToPayForCall.value; // 이제 0이 될 수 있음
+    const chipsToPay = myChipsToPayForCall.value;
 
-    // 1. 내가 첫 액션 플레이어이면서 currentBet이 0이면 콜 불가
     if (isMyFirstActionInRound.value && room.value.currentBet === 0) {
         return false;
     }
 
-    // 2. currentBet이 0인데 내가 첫 액션이 아니면 (다른 사람이 체크했을 때) 콜(0) 가능
     if (room.value.currentBet === 0 && chipsToPay === 0 && hasOtherPlayersActedInRound.value) {
         return true;
     }
 
-    // 3. currentBet이 0보다 크면, 칩이 충분할 때 가능 (올인 콜 포함)
     return chipsToPay > 0 && myChips >= chipsToPay;
 });
 
-// '삥' 버튼 클릭 시 실제로 나갈 칩 금액을 계산하는 computed 속성 (서버로 보낼 최종 베팅 총액)
 const myTargetTotalBetForBbing = computed(() => {
     if (!canBettingPhaseAction.value) return 0;
 
@@ -369,24 +358,18 @@ const myTargetTotalBetForBbing = computed(() => {
 
     let targetTotalBet = 0;
 
-    // 사용자 규칙:
-    // 1. room.currentBet이 0인 경우: bbingUnit만큼 베팅 (첫 베팅)
-    // 2. room.currentBet이 0이 아닌 경우: room.currentBet + bbingUnit만큼 베팅 (앞 사람 베팅에 삥 얹기)
     if (currentHighestBet === 0) {
         targetTotalBet = bbingUnit;
     } else {
         targetTotalBet = currentHighestBet + bbingUnit;
     }
 
-    // 삥을 걸기 위한 최소 금액은 room.betAmount 이므로, targetTotalBet이 이보다 작으면 삥 불가.
     if (targetTotalBet < bbingUnit) return 0;
 
-    // 내가 낼 금액이 나의 총 칩보다 많으면 낼 수 없음 (올인 삥은 없음)
     const chipsToPay = targetTotalBet - (myPlayer.value?.currentRoundBet || 0);
-    return (myPlayer.value?.chips || 0) >= chipsToPay ? targetTotalBet : 0; // 낼 수 있다면 목표 총 베팅액 반환, 아니면 0
+    return (myPlayer.value?.chips || 0) >= chipsToPay ? targetTotalBet : 0;
 });
 
-// '삥' 버튼에 표시될 금액 (내가 추가로 내야 할 금액)
 const myChipsToPayForBbing = computed(() => {
     const targetTotalBet = myTargetTotalBetForBbing.value;
     if (targetTotalBet === 0) return 0;
@@ -395,20 +378,12 @@ const myChipsToPayForBbing = computed(() => {
 
 
 const canBbing = computed(() => {
-    // 규칙:
-    // 1. 내가 첫 액션 플레이어이면서 currentBet이 0일 때 삥 가능.
-    // 2. currentBet이 0보다 크고, 삥 액션이 레이즈의 역할을 할 때 (즉, currentBet + betAmount 만큼 올릴 때) 삥 가능.
-    //    이 경우 `myTargetTotalBetForBbing`이 계산된 값이 존재하며, 내 칩이 충분해야 함.
-
     if (!canBettingPhaseAction.value) return false;
 
-    // `myTargetTotalBetForBbing`가 0보다 크다는 것은 삥을 걸 수 있는 상황이라는 의미이며,
-    // 칩 부족 여부까지 포함하고 있음.
     return myTargetTotalBetForBbing.value > 0;
 });
 
 
-// 헬퍼: 타겟 총 베팅 금액에 도달하기 위해 필요한 칩 (내 칩에서 빠져나갈 금액)
 const calculateChipsNeededForTotalBet = (totalTargetBet) => {
     return totalTargetBet - (myPlayer.value?.currentRoundBet || 0);
 };
@@ -418,20 +393,16 @@ const getRaiseAmountForHalf = computed(() => {
     const currentBet = room.value.currentBet || 0;
     const minRaiseUnit = room.value.betAmount || 0;
 
-    let targetTotalBet; // 플레이어가 최종적으로 베팅할 총 금액
+    let targetTotalBet;
 
-    // 현재 베팅이 0인 경우 (이 라운드에서 첫 베팅으로서의 '하프')
     if (currentBet === 0) {
         targetTotalBet = minRaiseUnit + Math.floor(pot / 2);
-    } else { // 이미 베팅이 있는 경우
+    } else {
         targetTotalBet = currentBet + Math.floor(pot / 2);
     }
 
-    // 서버의 최소 레이즈 조건 (currentBet + minRaiseUnit)을 충족해야 함
-    // currentBet이 0인 경우, 첫 레이즈는 최소 minRaiseUnit이어야 함.
     const minPossibleRaiseTotal = currentBet === 0 ? minRaiseUnit : currentBet + minRaiseUnit;
 
-    // 목표 총 베팅액이 최소 레이즈 금액보다 작으면 최소 레이즈 금액으로 조정
     return Math.max(targetTotalBet, minPossibleRaiseTotal);
 });
 
@@ -441,14 +412,12 @@ const canRaiseToHalf = computed(() => {
     const amountNeeded = calculateChipsNeededForTotalBet(totalTargetBet);
     const myChips = myPlayer.value?.chips || 0;
 
-    // 레이즈 금액이 유효한지 확인 (currentBet보다 커야 함)
-    if (amountNeeded <= 0) return false; // 레이즈인데 추가 금액이 없거나 음수
-    if (myChips < amountNeeded) return false; // 칩 부족 시 레이즈 불가 (올인 레이즈는 별도 버튼 또는 처리)
+    if (amountNeeded <= 0) return false;
+    if (myChips < amountNeeded) return false;
 
-    // 서버 측 최소 레이즈 유효성 검사와 동일하게
-    if (room.value.currentBet === 0) { // 선 베팅으로서 레이즈
+    if (room.value.currentBet === 0) {
         return totalTargetBet >= room.value.betAmount;
-    } else { // 후속 레이즈
+    } else {
         return totalTargetBet >= (room.value.currentBet + room.value.betAmount);
     }
 });
@@ -477,7 +446,7 @@ const canRaiseToFull = computed(() => {
     const myChips = myPlayer.value?.chips || 0;
 
     if (amountNeeded <= 0) return false;
-    if (myChips < amountNeeded) return false; // 칩 부족 시 레이즈 불가
+    if (myChips < amountNeeded) return false;
 
     if (room.value.currentBet === 0) {
         return totalTargetBet >= room.value.betAmount;
@@ -492,14 +461,14 @@ const canDie = computed(() => {
 
 const canExchangeCards = computed(() => {
     return canExchangePhaseAction.value &&
-           myPlayer.value?.canExchange === true && // 명시적으로 true 체크
+           myPlayer.value?.canExchange === true &&
            room.value.currentExchangeOpportunityIndex > -1 &&
            room.value.currentExchangeOpportunityIndex < room.value.maxExchangeOpportunities;
 });
 
 const canStay = computed(() => {
     return canExchangePhaseAction.value &&
-           myPlayer.value?.canExchange === true && // 명시적으로 true 체크
+           myPlayer.value?.canExchange === true &&
            room.value.currentExchangeOpportunityIndex > -1 &&
            room.value.currentExchangeOpportunityIndex < room.value.maxExchangeOpportunities;
 });
@@ -565,15 +534,17 @@ const handleLeaveRoom = () => {
 
     if (room.value.status === 'playing' && myPlayer.value && !myPlayer.value.leaveReserved) {
         if (confirm('게임이 진행 중입니다. 게임 종료 후 방을 나가시겠습니까?')) {
-            socket.emit('reserveLeaveRoom', roomId.value, (response) => {
-                if (response.success) {
-                    logger.notify('게임 종료 후 퇴장 예약되었습니다.', 'info');
-                    addGameEventLog('퇴장 예약 성공', 'info');
-                } else {
-                    logger.notify('퇴장 예약 실패: ' + response.message, 'error');
-                    addGameEventLog(`퇴장 예약 실패: ${response.message}`, 'error');
-                }
-            });
+            if (socket.value) {
+              socket.value.emit('reserveLeaveRoom', roomId.value, (response) => {
+                  if (response.success) {
+                      logger.notify('게임 종료 후 퇴장 예약되었습니다.', 'info');
+                      addGameEventLog('퇴장 예약 성공', 'info');
+                  } else {
+                      logger.notify('퇴장 예약 실패: ' + response.message, 'error');
+                      addGameEventLog(`퇴장 예약 실패: ${response.message}`, 'error');
+                  }
+              });
+            }
         }
     } else {
         leaveRoom();
@@ -588,34 +559,38 @@ const leaveRoom = () => {
       return;
   }
 
-  socket.emit('leaveRoom', roomId.value, (response) => {
-    if (response.success) {
-      logger.log('방 나가기 성공');
-      addGameEventLog('방 나가기 성공', 'info');
-      router.replace('/lobby');
-    } else {
-      logger.notify('방 나가기 실패: ' + (response.message || '알 수 없는 오류'), 'error');
-      addGameEventLog(`방 나가기 실패: ${response.message || '알 수 없는 오류'}`, 'error');
-    }
-  });
+  if (socket.value) {
+    socket.value.emit('leaveRoom', roomId.value, (response) => {
+      if (response.success) {
+        logger.log('방 나가기 성공');
+        addGameEventLog('방 나가기 성공', 'info');
+        router.replace('/lobby');
+      } else {
+        logger.notify('방 나가기 실패: ' + (response.message || '알 수 없는 오류'), 'error');
+        addGameEventLog(`방 나가기 실패: ${response.message || '알 수 없는 오류'}`, 'error');
+      }
+    });
+  }
 };
 
 const cancelLeaveRoom = () => {
     if (room.value.status === 'playing' && myPlayer.value && myPlayer.value.leaveReserved) {
-        socket.emit('cancelLeaveRoom', roomId.value, (response) => {
-            if (response.success) {
-                logger.notify('퇴장 예약이 취소되었습니다.', 'info');
-                addGameEventLog('퇴장 예약 취소 성공', 'info');
-            } else {
-                logger.notify('퇴장 예약 취소 실패: ' + response.message, 'error');
-                addGameEventLog(`퇴장 예약 취소 실패: ${response.message}`, 'error');
-            }
-        });
+        if (socket.value) {
+          socket.value.emit('cancelLeaveRoom', roomId.value, (response) => {
+              if (response.success) {
+                  logger.notify('퇴장 예약이 취소되었습니다.', 'info');
+                  addGameEventLog('퇴장 예약 취소 성공', 'info');
+              } else {
+                  logger.notify('퇴장 예약 취소 실패: ' + response.message, 'error');
+                  addGameEventLog(`퇴장 예약 취소 실패: ${response.message}`, 'error');
+              }
+          });
+        }
     }
 };
 
 const startGame = () => {
-    if (socket.connected && isRoomCreator.value && room.value.status === 'waiting') {
+    if (socket.value && socket.value.connected && isRoomCreator.value && room.value.status === 'waiting') {
         if (players.value.length < 2) {
             logger.notify('최소 2명 이상의 플레이어가 있어야 게임을 시작할 수 있습니다.', 'warn');
             addGameEventLog('게임 시작 실패: 최소 인원 미달', 'warn');
@@ -623,7 +598,7 @@ const startGame = () => {
         }
         logger.log('게임 시작 요청');
         addGameEventLog('게임 시작 요청', 'info');
-        socket.emit('startGame', roomId.value, (response) => {
+        socket.value.emit('startGame', roomId.value, (response) => {
             if (response.success) {
                 logger.log('게임 시작 성공!');
                 addGameEventLog('게임 시작 성공!', 'success');
@@ -692,7 +667,7 @@ const handlePlayerAction = (actionType, payload = null) => {
         logger.notify('지금은 당신의 턴이 아닙니다.', 'warn');
         return;
     }
-    if (!socket.connected) {
+    if (!socket.value || !socket.value.connected) {
         logger.notify('Socket.IO 연결이 끊어졌습니다. 액션을 수행할 수 없습니다.', 'error');
         router.replace('/login');
         return;
@@ -708,32 +683,31 @@ const handlePlayerAction = (actionType, payload = null) => {
     const isCommonAction = (actionType === 'die');
 
     if (room.value.currentPhase === 'betting') {
-        if (!isBettingPhaseActionCheck && !isCommonAction) { // 베팅 페이즈에 베팅/다이 액션이 아니면 오류
+        if (!isBettingPhaseActionCheck && !isCommonAction) {
             logger.notify('현재는 베팅 페이즈입니다. 베팅 관련 액션 또는 다이를 선택하세요.', 'warn');
             addGameEventLog('액션 실패: 현재 페이즈와 액션 불일치 (베팅 페이즈)', 'warn');
             return;
         }
     } else if (room.value.currentPhase === 'exchange') {
-        if (!isExchangePhaseActionCheck && !isCommonAction) { // 교환 페이즈에 교환/스테이/다이 액션이 아니면 오류
+        if (!isExchangePhaseActionCheck && !isCommonAction) {
             logger.notify('현재는 카드 교환 페이즈입니다. 교환/스테이 또는 다이를 선택하세요.', 'warn');
             addGameEventLog('액션 실패: 현재 페이즈와 액션 불일치 (교환 페이즈)', 'warn');
             return;
         }
-        // 교환 페이즈 내 추가 검증
         if (isExchangePhaseActionCheck && (room.value.currentExchangeOpportunityIndex === -1 || room.value.currentExchangeOpportunityIndex >= room.value.maxExchangeOpportunities)) {
             logger.notify('현재 라운드에는 카드 교환을 할 수 없습니다.', 'warn');
             addGameEventLog('액션 실패: 유효한 교환 기회가 아님', 'warn');
             return;
         }
-    } else { // 'waiting' 등 다른 페이즈에서는 게임 액션 불가
+    } else {
         logger.notify(`현재 게임 상태(${displayCurrentPhase.value})에서는 해당 액션을 할 수 없습니다.`, 'warn');
         addGameEventLog(`액션 실패: 현재 페이즈(${displayCurrentPhase.value})에서 액션 불가`, 'warn');
         return;
     }
 
 
-    let finalAmount = null; // 서버로 보낼 amount 값 (총 베팅액 또는 지불액)
-    let cardsToExchangeData = undefined; // 교환할 카드 정보
+    let finalAmount = null;
+    let cardsToExchangeData = undefined;
 
     switch (actionType) {
         case 'check':
@@ -742,7 +716,7 @@ const handlePlayerAction = (actionType, payload = null) => {
                 addGameEventLog('액션 실패: 체크 불가 (조건 불충족)', 'warn');
                 return;
             }
-            finalAmount = 0; // 체크는 0칩 지불
+            finalAmount = 0;
             break;
         case 'call':
             if (!canCall.value) {
@@ -750,30 +724,25 @@ const handlePlayerAction = (actionType, payload = null) => {
                 addGameEventLog('액션 실패: 콜 불가 (조건 불충족)', 'warn');
                 return;
             }
-            // ✨ FIX: 콜 액션 시 서버에 보낼 금액 수정 (사용자 규칙 반영)
-            // 서버에 전달하는 `amount`는 서버가 `room.currentBet`에 맞춰야 하는 목표 총 베팅액이 됩니다.
-            // room.currentBet이 0이면, 콜은 0칩을 의미 (서버의 `currentBet`에 맞추는 것이므로 `0`을 보냄)
-            finalAmount = room.value.currentBet; // 서버는 `currentBet`과 플레이어 `currentRoundBet`을 비교하여 지불액 결정
+            finalAmount = room.value.currentBet;
             if (room.value.currentBet === 0 && myChipsToPayForCall.value === 0) {
-                finalAmount = 0; // 명시적으로 콜(0)을 나타냄
+                finalAmount = 0;
             }
             break;
         case 'die':
             finalAmount = 0;
             break;
         case 'stay':
-            // ✨ FIX: 스테이 액션은 카드 교환과 동일하게 `cardsToExchangeData`에 빈 배열을 설정
-            cardsToExchangeData = []; // 빈 배열은 카드 교환 0장을 의미하며, 서버에서 스테이로 처리
-            finalAmount = 0; // 스테이는 금액 지불 없음
+            cardsToExchangeData = [];
+            finalAmount = 0;
             break;
-        case 'bet': // '삥'
+        case 'bet':
             {
                 if (!canBbing.value) {
                      logger.notify('현재 삥을 걸 수 없습니다. 조건을 확인하세요.', 'warn');
                      addGameEventLog('액션 실패: 삥 불가 (조건 불충족)', 'warn');
                      return;
                 }
-                // '삥' 액션 시 서버에 전달할 최종 베팅 금액은 `myTargetTotalBetForBbing`
                 finalAmount = myTargetTotalBetForBbing.value;
             }
             break;
@@ -786,7 +755,7 @@ const handlePlayerAction = (actionType, payload = null) => {
                     return;
                 }
 
-                finalAmount = payload; // payload는 이미 총 베팅 금액
+                finalAmount = payload;
                 if (typeof finalAmount !== 'number' || finalAmount <= 0) {
                     logger.notify('유효한 레이즈 금액을 입력해주세요.', 'warn');
                     addGameEventLog('액션 실패: 유효하지 않은 레이즈 금액', 'warn');
@@ -840,21 +809,23 @@ const handlePlayerAction = (actionType, payload = null) => {
     logger.log(`[GameRoom] 플레이어 액션 전송: ${actionType}, Amount: ${finalAmount}, CardsToExchange:`, cardsToExchangeData);
     addGameEventLog(`액션 전송: ${actionType} (금액: ${finalAmount !== null ? finalAmount : 'N/A'}, 교환 카드: ${cardsToExchangeData ? cardsToExchangeData.length + '장' : '없음'})`, 'info');
 
-    socket.emit('playerAction', {
-        roomId: roomId.value,
-        action: actionType,
-        amount: finalAmount, // 최종적으로 서버로 보낼 총 베팅 금액 또는 0
-        cardsToExchange: cardsToExchangeData
-    }, (response) => {
-        if (response.success) {
-            logger.log('[GameRoom] 액션 요청 성공:', actionType);
-            addGameEventLog(`액션 성공: ${actionType}`, 'success');
-            selectedCardsIds.value = [];
-        } else {
-            logger.notify('액션 실패: ' + (response.message || '알 수 없는 오류'), 'error');
-            addGameEventLog(`액션 실패: ${response.message || '알 수 없는 오류'}`, 'error');
-        }
-    });
+    if (socket.value) {
+        socket.value.emit('playerAction', {
+            roomId: roomId.value,
+            action: actionType,
+            amount: finalAmount,
+            cardsToExchange: cardsToExchangeData
+        }, (response) => {
+            if (response.success) {
+                logger.log('[GameRoom] 액션 요청 성공:', actionType);
+                addGameEventLog(`액션 성공: ${actionType}`, 'success');
+                selectedCardsIds.value = [];
+            } else {
+                logger.notify('액션 실패: ' + (response.message || '알 수 없는 오류'), 'error');
+                addGameEventLog(`액션 실패: ${response.message || '알 수 없는 오류'}`, 'error');
+            }
+        });
+    }
 };
 
 const handleRoomUpdated = (updatedRoom) => {
@@ -883,7 +854,7 @@ const handleRoomUpdated = (updatedRoom) => {
     }
 };
 
-socket.on('gameStarted', (data) => {
+const gameStartedHandler = (data) => {
     logger.log('[GameRoom] 게임 시작 이벤트 수신:', data);
     addGameEventLog('게임 시작! 🃏', 'important');
     roomStatus.value = data.room.status;
@@ -906,32 +877,22 @@ socket.on('gameStarted', (data) => {
 
     logger.notify('게임이 시작되었습니다!', 'info');
     selectedCardsIds.value = [];
-});
+};
 
-socket.on('roundStarted', (data) => { // 새로운 베팅 라운드 시작 이벤트
+const roundStartedHandler = (data) => {
   logger.log('[GameRoom] 라운드 시작 이벤트 수신:', data);
     addGameEventLog(`${data.gameRoundName} 라운드 시작! 💰`, 'important');
     currentBettingRoundIndex.value = data.currentBettingRoundIndex;
-    currentExchangeOpportunityIndex.value = data.currentExchangeOpportunityIndex; // 보통 -1
+    currentExchangeOpportunityIndex.value = data.currentExchangeOpportunityIndex;
     gameRoundName.value = data.gameRoundName;
-    currentPhase.value = data.currentPhase; // ✨ FIX: 'betting' 페이즈로 명확히 업데이트
+    currentPhase.value = data.currentPhase;
     currentBet.value = data.currentBet;
     pot.value = data.pot;
-
-    // ✨ NEW: 다음 베팅 라운드 시작 시 내 패 초기화 (서버에서 다시 전송하지 않으므로 유지된 패로 계속 진행)
-    // myHand.value = data.myHand; // 서버에서 roundStarted 이벤트에 myHand를 보내지 않으므로 주석 처리
-    selectedCardsIds.value = []; // 선택된 카드 초기화
-
-    // ✨ NEW: 플레이어들의 hasActedInBettingRound도 초기화되어야 함 (서버에서 이미 함)
-    // 클라이언트 측에서도 `players` 배열의 `hasActedInBettingRound`를 서버 데이터로 업데이트받을 수 있도록
-    // `roomUpdated` 이벤트 핸들러를 통해 `players` 상태를 최신화하는 것이 중요합니다.
-    // 현재 `handleRoomUpdated`에서 `players.value = updatedRoom.players;`가 있으므로 별도 로직은 필요 없습니다.
-
+    selectedCardsIds.value = [];
     logger.notify(`${data.gameRoundName} 라운드가 시작되었습니다!`, 'info');
+};
 
-});
-
-socket.on('phaseChanged', (data) => { // 페이즈 변경 이벤트 (베팅->교환 또는 교환->베팅)
+const phaseChangedHandler = (data) => {
     logger.log('[GameRoom] 페이즈 변경 이벤트 수신:', data);
     addGameEventLog(`페이즈 변경: ${data.currentPhase === 'betting' ? '베팅 페이즈' : '카드 교환 페이즈'}`, 'info');
     currentBettingRoundIndex.value = data.currentBettingRoundIndex;
@@ -940,58 +901,54 @@ socket.on('phaseChanged', (data) => { // 페이즈 변경 이벤트 (베팅->교
     currentPhase.value = data.currentPhase;
     currentBet.value = data.currentBet;
     pot.value = data.pot;
-
     logger.notify(data.message || `현재 페이즈: ${displayCurrentPhase.value}`, 'info');
     selectedCardsIds.value = [];
-});
+};
 
-socket.on('turnChanged', (data) => {
+const turnChangedHandler = (data) => {
   logger.log('[GameRoom] 턴 변경 이벤트 수신:', data);
     const player = players.value.find(p => p.id === data.currentPlayerId);
     if (player) {
         addGameEventLog(`${player.name}님의 턴입니다. (남은 시간: ${data.timeLeft}초)`, 'info');
     }
     currentTurnPlayerId.value = data.currentPlayerId;
-    timeLeft.value = data.timeLeft; // ✨ 타이머 초기 시간 설정
+    timeLeft.value = data.timeLeft;
     if (isMyTurn.value) {
         logger.notify('당신의 턴입니다!', 'info');
-        // ✨ 내 턴이 되었을 때, 베팅 페이즈이고 현재 베팅이 없으면 첫 액션 로그 추가
         if (currentPhase.value === 'betting') {
             const logMessage = `버튼 상태: Check: ${canCheck.value}, Call: ${canCall.value} (낼 금액: ${myChipsToPayForCall.value}), Bbing (낼 금액: ${myChipsToPayForBbing.value}) (총: ${myTargetTotalBetForBbing.value}): ${canBbing.value}, Half (낼 금액: ${calculateChipsNeededForTotalBet(getRaiseAmountForHalf.value)}) (총: ${getRaiseAmountForHalf.value}): ${canRaiseToHalf.value}, Full (낼 금액: ${calculateChipsNeededForTotalBet(getRaiseAmountForFull.value)}) (총: ${getRaiseAmountForFull.value}): ${canRaiseToFull.value}, Die: ${canDie.value}`;
-
-            // ✨ MODIFIED: 디버그 로그 조건문 수정 및 간소화
             if (isMyFirstActionInRound.value && room.value.currentBet === 0) {
                 addGameEventLog(`(내 턴) 라운드의 첫 액션 플레이어 (베팅 시작): ${logMessage}`, 'debug');
-            } else if (!isMyFirstActionInRound.value && room.value.currentBet === 0) { // 다른 사람이 체크했을 때
-                 addGameEventLog(`(내 턴) 이전 플레이어 체크 후 (콜(0) 가능): ${logMessage}`, 'debug');
-            } else if (room.value.currentBet > 0) { // 베팅이 이미 있는 상태
+            } else if (!isMyFirstActionInRound.value && room.value.currentBet === 0) {
+                addGameEventLog(`(내 턴) 이전 플레이어 체크 후 (콜(0) 가능): ${logMessage}`, 'debug');
+            } else if (room.value.currentBet > 0) {
                 addGameEventLog(`(내 턴) 베팅이 있는 상태: ${logMessage}`, 'debug');
-            } else { // 기타 예외 상황 (디버깅용)
-                 addGameEventLog(`(내 턴) 알 수 없는 베팅 페이즈 상태: ${logMessage}`, 'debug');
+            } else {
+                addGameEventLog(`(내 턴) 알 수 없는 베팅 페이즈 상태: ${logMessage}`, 'debug');
             }
         }
     }
     selectedCardsIds.value = [];
-});
+};
 
-socket.on('playerAction', (data) => {
+const playerActionHandler = (data) => {
     logger.log('[GameRoom] 플레이어 액션 이벤트 수신:', data);
     if (data.actionType === 'allIn') {
-        addGameEventLog(data.message, 'warn'); // 올인 메시지는 경고색으로
+        addGameEventLog(data.message, 'warn');
         logger.notify(data.message, 'warning');
-    } else if (data.actionType === 'autoDie') { // ✨ 자동 다이 처리
+    } else if (data.actionType === 'autoDie') {
         addGameEventLog(data.message, 'error');
         logger.notify(data.message, 'error');
-    } else if (data.actionType === 'autoStay') { // ✨ 자동 스테이 처리 (NEW)
+    } else if (data.actionType === 'autoStay') {
         addGameEventLog(data.message, 'warn');
         logger.notify(data.message, 'info');
     } else {
-        addGameEventLog(data.message, 'action'); // 일반 액션 메시지는 type 'action'으로
+        addGameEventLog(data.message, 'action');
         logger.notify(data.message, 'info');
     }
-});
+};
 
-socket.on('myHandUpdated', (data) => {
+const myHandUpdatedHandler = (data) => {
     logger.log('[GameRoom] 내 패 업데이트 이벤트 수신:', data);
     addGameEventLog('내 패가 업데이트되었습니다! 🃏', 'info');
     myHand.value = data.hand;
@@ -1001,9 +958,9 @@ socket.on('myHandUpdated', (data) => {
     }
     logger.notify('카드를 교환하여 새로운 패를 받았습니다!', 'info');
     selectedCardsIds.value = [];
-});
+};
 
-socket.on('gameEnded', (data) => {
+const gameEndedHandler = (data) => {
     logger.log('[GameRoom] 게임 종료 이벤트 수신:', data);
     addGameEventLog('게임 종료! 🏆', 'important');
     roomStatus.value = data.roomStatus || 'ended';
@@ -1013,18 +970,18 @@ socket.on('gameEnded', (data) => {
     showGameEndedModal.value = true;
     logger.notify('게임이 종료되었습니다!', 'info');
     selectedCardsIds.value = [];
-});
+};
 
-socket.on('forceLeaveRoom', (data) => {
+const forceLeaveRoomHandler = (data) => {
   logger.warn(`[GameRoom] 서버로부터 강제 퇴장 요청: ${data.message}`);
   addGameEventLog(`강제 퇴장: ${data.message}`, 'error');
   logger.notify(data.message || '방에서 강제 퇴장되었습니다.', 'warn');
   router.replace('/lobby');
-});
+};
 
-// ✨ 타이머 업데이트 이벤트 리스너
+// ✨ NEW: 타이머 업데이트 이벤트 리스너 함수 정의
 const handleTimerUpdate = (data) => {
-    if (data.currentPlayerId === currentTurnPlayerId.value) { // 현재 턴 플레이어의 타이머만 업데이트
+    if (data.currentPlayerId === currentTurnPlayerId.value) {
         timeLeft.value = data.timeLeft;
         if (isMyTurn.value && data.timeLeft <= 5 && data.timeLeft > 0) {
             logger.notify(`${data.timeLeft}초 남았습니다!`, 'warn');
@@ -1034,65 +991,64 @@ const handleTimerUpdate = (data) => {
 
 const requestRoomInfo = () => {
     logger.log(`[GameRoom] Socket.IO 연결 상태:`, isSocketConnected.value);
-    if (!isSocketConnected.value) {
+    if (!socket.value || !isSocketConnected.value) {
         logger.warn(`[GameRoom] Socket.IO 연결되지 않음. 로그인 페이지로 리다이렉트.`);
         addGameEventLog('Socket 연결되지 않아 방 정보 요청 불가.', 'error');
         router.replace('/login');
         return;
     }
 
-    logger.log(`[GameRoom] Socket.IO 연결됨, 방 ${roomId.value} 정보 요청 중...`);
-    addGameEventLog(`방 ${roomId.value} 정보 요청 중...`, 'info');
-    socket.emit('getRoomInfo', roomId.value, (response) => {
-        if (response.success && response.room) {
-            logger.log('초기 방 정보 수신:', response.room);
-            addGameEventLog('초기 방 정보 수신 완료.', 'info');
-            roomName.value = response.room.name;
-            betAmount.value = response.room.betAmount;
-            players.value = response.room.players;
-            roomStatus.value = response.room.status;
-            roomCreatorId.value = response.room.creatorId;
-            currentTurnPlayerId.value = response.room.currentTurnPlayerId;
-            currentBet.value = response.room.currentBet;
-            pot.value = response.room.pot;
+    if (socket.value) {
+      socket.value.emit('getRoomInfo', roomId.value, (response) => {
+          if (response.success && response.room) {
+              logger.log('초기 방 정보 수신:', response.room);
+              addGameEventLog('초기 방 정보 수신 완료.', 'info');
+              roomName.value = response.room.name;
+              betAmount.value = response.room.betAmount;
+              players.value = response.room.players;
+              roomStatus.value = response.room.status;
+              roomCreatorId.value = response.room.creatorId;
+              currentTurnPlayerId.value = response.room.currentTurnPlayerId;
+              currentBet.value = response.room.currentBet;
+              pot.value = response.room.pot;
 
-            currentBettingRoundIndex.value = response.room.currentBettingRoundIndex;
-            currentExchangeOpportunityIndex.value = response.room.currentExchangeOpportunityIndex;
-            gameRoundName.value = response.room.gameRoundName;
-            currentPhase.value = response.room.currentPhase;
-            maxBettingRounds.value = response.room.maxBettingRounds || 4;
-            maxExchangeOpportunities.value = response.room.maxExchangeOpportunities || 3;
+              currentBettingRoundIndex.value = response.room.currentBettingRoundIndex;
+              currentExchangeOpportunityIndex.value = response.room.currentExchangeOpportunityIndex;
+              gameRoundName.value = response.room.gameRoundName;
+              currentPhase.value = response.room.currentPhase;
+              maxBettingRounds.value = response.room.maxBettingRounds || 4;
+              maxExchangeOpportunities.value = response.room.maxExchangeOpportunities || 3;
 
-            dealerId.value = response.room.dealerId;
-            smallBlindId.value = response.room.smallBlindId;
-            bigBlindId.value = response.room.bigBlindId;
+              dealerId.value = response.room.dealerId;
+              smallBlindId.value = response.room.smallBlindId;
+              bigBlindId.value = response.room.bigBlindId;
 
-            // 타이머 남은 시간 설정 (처음 방 로드 시)
-            // 서버는 `turnChanged` 이벤트에서 `timeLeft`를 보내므로, 여기서는 기본값 0으로 시작.
-            // 또는 서버에서 `getRoomInfo` 응답에 `timeLeft`를 포함하도록 할 수 있음.
-            timeLeft.value = 0;
+              timeLeft.value = 0; // 초기 로딩 시 타이머는 0으로 시작
 
-            if (!response.room.players.some(p => p.id === myUserId.value) && response.room.status === 'waiting') {
-                socket.emit('joinRoom', { roomId: roomId.value, password: null }, (joinResponse) => {
-                    if (!joinResponse.success) {
-                        logger.notify('방 입장 실패: ' + joinResponse.message, 'error');
-                        addGameEventLog(`방 입장 실패: ${joinResponse.message}`, 'error');
-                        router.replace('/lobby');
-                    } else {
-                        addGameEventLog('방 입장 성공!', 'success');
-                    }
-                });
-            } else if (!response.room.players.some(p => p.id === myUserId.value) && response.room.status === 'playing') {
-                logger.notify('게임 중인 방에는 입장할 수 없습니다.', 'warn');
-                addGameEventLog('게임 중인 방 입장 불가.', 'warn');
-                router.replace('/lobby');
-            }
-        } else {
-            logger.notify('방 정보를 가져오지 못했습니다: ' + (response.message || '알 수 없는 오류'), 'error');
-            addGameEventLog(`방 정보 요청 실패: ${response.message || '알 수 없는 오류'}`, 'error');
-            router.replace('/lobby');
-        }
-    });
+              if (!response.room.players.some(p => p.id === myUserId.value) && response.room.status === 'waiting') {
+                  if (socket.value) {
+                    socket.value.emit('joinRoom', { roomId: roomId.value, password: null }, (joinResponse) => {
+                        if (!joinResponse.success) {
+                            logger.notify('방 입장 실패: ' + joinResponse.message, 'error');
+                            addGameEventLog(`방 입장 실패: ${joinResponse.message}`, 'error');
+                            router.replace('/lobby');
+                        } else {
+                            addGameEventLog('방 입장 성공!', 'success');
+                        }
+                    });
+                  }
+              } else if (!response.room.players.some(p => p.id === myUserId.value) && response.room.status === 'playing') {
+                  logger.notify('게임 중인 방에는 입장할 수 없습니다.', 'warn');
+                  addGameEventLog('게임 중인 방 입장 불가.', 'warn');
+                  router.replace('/lobby');
+              }
+          } else {
+              logger.notify('방 정보를 가져오지 못했습니다: ' + (response.message || '알 수 없는 오류'), 'error');
+              addGameEventLog(`방 정보 요청 실패: ${response.message || '알 수 없는 오류'}`, 'error');
+              router.replace('/lobby');
+          }
+      });
+    }
 };
 
 const handleBeforeUnload = (event) => {
@@ -1113,7 +1069,6 @@ const handleBeforeUnload = (event) => {
 
 const closeGameEndedModal = () => {
     showGameEndedModal.value = false;
-    // 게임 종료 후 로비로 이동하지 않고 방에 머무름 (기존 기능)
 };
 
 onMounted(() => {
@@ -1131,33 +1086,37 @@ onMounted(() => {
 
     window.addEventListener('beforeunload', handleBeforeUnload);
 
-    socket.on('roomUpdated', handleRoomUpdated);
-    // 이미 gameStarted, roundStarted 등의 이벤트 리스너가 위 함수 내에서 로깅 및 데이터 업데이트를 처리합니다.
-    // 중복으로 등록하지 않도록 주의합니다.
-    // 기존에 아래와 같이 등록되어 있던 부분을 제거합니다.
-    // socket.on('gameStarted', (data) => { logger.log('[GameRoom] gameStarted 이벤트 수신', data); });
-    // socket.on('roundStarted', (data) => { logger.log('[GameRoom] roundStarted 이벤트 수신', data); });
-    // socket.on('phaseChanged', (data) => { logger.log('[GameRoom] phaseChanged 이벤트 수신', data); });
-    // socket.on('turnChanged', (data) => { logger.log('[GameRoom] turnChanged 이벤트 수신', data); });
-    // socket.on('playerAction', (data) => { logger.log('[GameRoom] playerAction 이벤트 수신', data); });
-    // socket.on('myHandUpdated', (data) => { logger.log('[GameRoom] myHandUpdated 이벤트 수신', data); });
-    // socket.on('gameEnded', (data) => { logger.log('[GameRoom] gameEnded 이벤트 수신', data); });
-    // socket.on('forceLeaveRoom', (data) => { logger.log('[GameRoom] forceLeaveRoom 이벤트 수신', data); });
-    socket.on('timerUpdate', handleTimerUpdate); // ✨ 이벤트 리스너 등록
+    // ✨ FIX: 모든 socket.on 이벤트 리스너를 socket.value.on으로 변경.
+    // socket.value가 null이 아닐 때만 등록하도록 안전성 추가
+    if (socket.value) {
+      socket.value.on('roomUpdated', handleRoomUpdated);
+      socket.value.on('gameStarted', gameStartedHandler); // 함수 참조로 변경
+      socket.value.on('roundStarted', roundStartedHandler); // 함수 참조로 변경
+      socket.value.on('phaseChanged', phaseChangedHandler); // 함수 참조로 변경
+      socket.value.on('turnChanged', turnChangedHandler); // 함수 참조로 변경
+      socket.value.on('playerAction', playerActionHandler); // 함수 참조로 변경
+      socket.value.on('myHandUpdated', myHandUpdatedHandler); // 함수 참조로 변경
+      socket.value.on('gameEnded', gameEndedHandler); // 함수 참조로 변경
+      socket.value.on('forceLeaveRoom', forceLeaveRoomHandler); // 함수 참조로 변경
+      socket.value.on('timerUpdate', handleTimerUpdate); // ✨ NEW: 함수 참조로 변경
+    }
 
     onUnmounted(() => {
         window.removeEventListener('beforeunload', handleBeforeUnload);
         unwatchIsConnected();
-        socket.off('roomUpdated', handleRoomUpdated);
-        socket.off('gameStarted');
-        socket.off('roundStarted');
-        socket.off('phaseChanged');
-        socket.off('turnChanged');
-        socket.off('playerAction');
-        socket.off('myHandUpdated');
-        socket.off('gameEnded');
-        socket.off('forceLeaveRoom');
-        socket.off('timerUpdate', handleTimerUpdate); // ✨ 이벤트 리스너 해제
+        // ✨ FIX: 모든 socket.off 이벤트 리스너를 socket.value.off로 변경
+        if (socket.value) {
+          socket.value.off('roomUpdated', handleRoomUpdated);
+          socket.value.off('gameStarted', gameStartedHandler); // 함수 참조로 변경
+          socket.value.off('roundStarted', roundStartedHandler); // 함수 참조로 변경
+          socket.value.off('phaseChanged', phaseChangedHandler); // 함수 참조로 변경
+          socket.value.off('turnChanged', turnChangedHandler); // 함수 참조로 변경
+          socket.value.off('playerAction', playerActionHandler); // 함수 참조로 변경
+          socket.value.off('myHandUpdated', myHandUpdatedHandler); // 함수 참조로 변경
+          socket.value.off('gameEnded', gameEndedHandler); // 함수 참조로 변경
+          socket.value.off('forceLeaveRoom', forceLeaveRoomHandler); // 함수 참조로 변경
+          socket.value.off('timerUpdate', handleTimerUpdate); // ✨ NEW: 함수 참조로 변경
+        }
     });
 });
 </script>

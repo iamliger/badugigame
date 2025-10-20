@@ -1,32 +1,42 @@
 <?php
 
+use App\Http\Controllers\RobotController;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
-use App\Http\Controllers\Api\AuthController;
-use App\Http\Controllers\RobotController; // ✨ FIX: 네임스페이스 경로 수정
+use App\Http\Controllers\Api\AuthController; // ✨ MODIFIED: Api 네임스페이스에 있는 AuthController 임포트
+use App\Http\Controllers\RobotAuthController; // RobotAuthController 임포트
 
+/*
+|--------------------------------------------------------------------------
+| API Routes
+|--------------------------------------------------------------------------
+*/
 
 Route::middleware('auth:sanctum')->get('/user', function (Request $request) {
     return $request->user();
 });
 
-// JWT 인증 관련 API 라우트
-Route::group([
-    'middleware' => 'api', // API 미들웨어 그룹 사용 (config/auth.php의 'api' 가드)
-    'prefix' => 'auth'     // 모든 라우트 앞에 '/api/auth' 접두사 추가
-], function ($router) {
-    Route::post('login', [AuthController::class, 'login']);
-    Route::post('register', [AuthController::class, 'register']); // 회원가입 라우트 추가
-    Route::post('logout', [AuthController::class, 'logout']);
-    Route::post('refresh', [AuthController::class, 'refresh']);
-    Route::post('me', [AuthController::class, 'me']); // 인증된 사용자 정보 가져오기
-    Route::get('user-chips', [AuthController::class, 'getUserChips']);
-    Route::get('check-token', [AuthController::class, 'checkTokenValidity']);
+Route::prefix('robot-control')->middleware('auth:sanctum')->group(function () {
+    Route::post('/start', [RobotController::class, 'startRobots'])->name('api.robot-control.start');
+    Route::post('/stop', [RobotController::class, 'stopRobots'])->name('api.robot-control.stop');
 });
 
-// ✨ NEW: 로봇 제어 API 라우트
-Route::middleware('auth:sanctum')->group(function () {
-    Route::post('/robot-control/start', [RobotController::class, 'startRobots'])->name('api.robot-control.start'); // ✨ FIX: 라우트 이름 지정
-    Route::post('/robot-control/stop', [RobotController::class, 'stopRobots'])->name('api.robot-control.stop'); // ✨ FIX: 라우트 이름 지정
-    // 필요시 로봇 개수 설정 API 등 추가 가능
+// 일반 사용자 인증 관련 라우트 (JWTAuth 사용)
+Route::prefix('auth')->group(function () {
+    Route::post('login', [AuthController::class, 'login']);
+    Route::post('register', [AuthController::class, 'register']); // ✨ NEW: register 라우트도 추가
+    Route::middleware('auth:api')->post('logout', [AuthController::class, 'logout']); // 'auth:api' 미들웨어 사용
+    Route::middleware('auth:api')->get('me', [AuthController::class, 'me']);           // 'auth:api' 미들웨어 사용
+    Route::middleware('auth:api')->post('refresh', [AuthController::class, 'refresh']); // 'auth:api' 미들웨어 사용
+    Route::middleware('auth:api')->get('user-chips', [AuthController::class, 'userChips']); // 'auth:api' 미들웨어 사용
+
+    // ✨ FIX: checkToken 라우트 정의 (Node.js에서 POST를 보내므로 POST 허용)
+    Route::middleware('auth:api')->post('check-token', [AuthController::class, 'checkToken'])->name('api.auth.check-token');
+});
+
+// 로봇 인증 관련 라우트 (Sanctum 사용)
+Route::prefix('robot-auth')->group(function () {
+    Route::post('login', [RobotAuthController::class, 'login']);
+    // ✨ FIX: check-token 라우트에 'auth:sanctum,robot' 미들웨어 명시 (Node.js 서버에서 Sanctum 로봇 토큰 검증용)
+    Route::post('check-token', [RobotAuthController::class, 'checkToken'])->middleware('auth:sanctum,robot');
 });

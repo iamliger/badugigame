@@ -3,7 +3,7 @@
 // 🃏 카드 유틸리티 함수 임포트
 import { createDeck, shuffleDeck, evaluateBadugiHand, compareBadugiHands } from '../utils/cards.js';
 // ✍️ 서버 로깅 함수 임포트 (server.js에서 내보낸 함수들을 여기서 임포트하여 사용)
-import { logDebug, warnDebug, errorDebug } from '../../server.js';
+import { logDebug, warnDebug, errorDebug } from '../../logger.js';
 
 /**
  * 🎮 바둑이 게임의 핵심 로직을 관리하는 서비스 클래스입니다.

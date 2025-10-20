@@ -4,7 +4,7 @@ namespace App\Http\Controllers;
 
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Http;
-use App\Helpers\RobotManager;
+use App\Models\Robot; // ✨ NEW: Robot 모델 임포트
 use Illuminate\Support\Facades\Log;
 
 class RobotController extends Controller
@@ -15,7 +15,11 @@ class RobotController extends Controller
     public function __construct()
     {
         $this->gameServerUrl = env('GAME_SERVER_URL', 'http://localhost:3000');
-        $this->gameServerApiSecret = env('GAME_SERVER_API_SECRET', 'your_game_server_api_secret');
+        $this->gameServerApiSecret = config('services.game_server.api_secret');
+
+        if (empty($this->gameServerApiSecret) || $this->gameServerApiSecret === 'your_game_server_api_secret') {
+            Log::warning('GAME_SERVER_API_SECRET이 설정되지 않았거나 기본값입니다. .env 및 config/services.php를 확인해주세요.');
+        }
     }
 
     /**
@@ -25,7 +29,6 @@ class RobotController extends Controller
      */
     public function startRobots(Request $request)
     {
-        // ✨ FIX: Filament에서 직접 비활성 로봇 목록을 받아 처리
         $robotsToStart = $request->input('robots', []);
 
         if (empty($robotsToStart)) {
@@ -33,17 +36,18 @@ class RobotController extends Controller
         }
 
         try {
-            // Node.js 게임 서버로 HTTP 요청 전송
             $response = Http::withHeaders([
-                'X-Game-Server-API-Secret' => $this->gameServerApiSecret, // 보안 헤더
+                'X-Game-Server-API-Secret' => $this->gameServerApiSecret,
             ])->post("{$this->gameServerUrl}/api/robot-commands/start", [
-                'robots' => $robotsToStart, // 라라벨에서 이미 필터링된 로봇 정보 전달
+                'robots' => $robotsToStart,
             ]);
 
             if ($response->successful()) {
-                // 로봇의 is_active 상태를 true로 업데이트 (게임 서버에서 성공적으로 시작했다면)
                 foreach ($robotsToStart as $robotData) {
-                    RobotManager::updateRobot($robotData['id'], ['is_active' => true]);
+                    $robot = Robot::find($robotData['id']);
+                    if ($robot) {
+                        $robot->update(['is_active' => true]);
+                    }
                 }
                 Log::info("로봇 시작 명령 성공: {$response->body()}");
                 return response()->json(['message' => '로봇 시작 명령 성공', 'response' => $response->json()]);
@@ -64,21 +68,15 @@ class RobotController extends Controller
      */
     public function stopRobots(Request $request)
     {
-        $robotIds = $request->input('robotIds', []); // 정지할 특정 로봇 ID 목록 (비어있으면 전체 정지)
-        // ✨ FIX: 정지할 로봇 목록을 RobotManager에서 가져와서 전달
-        $robotsToStop = collect(RobotManager::getRobots())
-            ->whereIn('id', $robotIds) // 특정 ID만 정지
-            ->where('is_active', true) // 활성 상태인 로봇만
-            ->values()
-            ->all();
+        $robotIds = $request->input('robotIds', []);
 
-        // robotIds가 비어있으면 모든 활성 로봇 정지
         if (empty($robotIds)) {
-            $robotsToStop = collect(RobotManager::getRobots())->where('is_active', true)->values()->all();
+            $robotsToStop = Robot::where('is_active', true)->get();
+        } else {
+            $robotsToStop = Robot::whereIn('id', $robotIds)->where('is_active', true)->get();
         }
 
-
-        if (empty($robotsToStop)) {
+        if ($robotsToStop->isEmpty()) {
             return response()->json(['message' => '정지할 활성 로봇이 없습니다.'], 400);
         }
 
@@ -86,14 +84,13 @@ class RobotController extends Controller
             $response = Http::withHeaders([
                 'X-Game-Server-API-Secret' => $this->gameServerApiSecret,
             ])->post("{$this->gameServerUrl}/api/robot-commands/stop", [
-                'robotIds' => collect($robotsToStop)->pluck('id')->all(),
+                'robotIds' => $robotsToStop->pluck('id')->all(),
             ]);
 
             if ($response->successful()) {
-                // 로봇의 is_active 상태를 false로 업데이트
-                foreach ($robotsToStop as $robotData) {
-                    RobotManager::updateRobot($robotData['id'], ['is_active' => false]);
-                }
+                $robotsToStop->each(function (Robot $robot) {
+                    $robot->update(['is_active' => false]);
+                });
                 Log::info("로봇 정지 명령 성공: {$response->body()}");
                 return response()->json(['message' => '로봇 정지 명령 성공', 'response' => $response->json()]);
             } else {

@@ -79,7 +79,7 @@ const setupSocket = inject('setupSocket'); // ✨ NEW: setupSocket 함수 주입
 
 const handleLogin = async () => {
   loginError.value = ''
-  let loginApiSuccess = false; // 로그인 API 호출 성공 여부 플래그
+  let loginApiSuccess = false;
 
   try {
     const response = await axios.post('http://localhost:8000/api/auth/login', {
@@ -103,16 +103,14 @@ const handleLogin = async () => {
     }
 
     if (loginApiSuccess) {
-        // ✨ NEW: 로그인 API 성공 후 setupSocket을 명시적으로 호출하여 Socket.IO 연결을 시작합니다.
-        // router.beforeEach 가드에서도 호출되지만, 여기서 한번 더 호출하여 즉각적인 연결을 보장합니다.
         if (setupSocket) {
-            const currentSocket = setupSocket(); // `setupSocket`이 새 인스턴스를 반환하거나 기존 인스턴스를 재사용합니다.
+            logger.log('[LoginView] 로그인 성공 후 setupSocket 호출 시도.');
+            const currentSocket = setupSocket(); // `setupSocket` 호출
             if (currentSocket && !currentSocket.connected) {
-                logger.log('[LoginView] 로그인 성공 후 Socket.IO 연결 시작 (setupSocket 호출).');
+                logger.log('[LoginView] Socket.IO 연결 시작 (setupSocket 호출).');
                 currentSocket.connect();
             } else if (!currentSocket) {
                 logger.error('[LoginView] setupSocket 호출 후에도 Socket.IO 인스턴스를 얻지 못했습니다.');
-                // 이 경우 연결을 기다리는 setInterval도 실패할 것이므로, 여기서 에러 처리 강화
                 throw new Error("Failed to initialize Socket.IO instance.");
             }
         } else {
@@ -120,28 +118,25 @@ const handleLogin = async () => {
             throw new Error("Socket.IO setup function not available.");
         }
 
-
-        const MAX_SOCKET_WAIT_TIME = 10000; // 최대 10초 대기 (더 여유롭게)
+        const MAX_SOCKET_WAIT_TIME = 10000;
         let socketWaitStartTime = Date.now();
 
         const checkSocketConnection = setInterval(() => {
-            // ✨ FIX: socket.value가 유효한 인스턴스이고 연결되었는지 확인합니다.
+            // ✨ FIX: logger.debug 대신 logger.log 사용
+            logger.log(`[LoginView] Socket.IO 연결 대기 중... isConnected: ${isSocketConnected.value}, instance: ${socket.value ? 'exists' : 'null'}, connected: ${socket.value?.connected || 'N/A'}`);
+
             if (isSocketConnected.value && socket.value && socket.value.connected) {
                 clearInterval(checkSocketConnection);
                 logger.log('[LoginView] Socket.IO 연결 확인 완료, 로비로 이동.');
                 router.replace('/lobby');
             } else if (Date.now() - socketWaitStartTime > MAX_SOCKET_WAIT_TIME) {
-                // 타임아웃
                 clearInterval(checkSocketConnection);
                 loginError.value = '로그인 성공했으나 게임 서버 연결에 실패했습니다. 다시 시도해주세요.';
                 logger.notify(loginError.value, 'error');
                 logger.error('[LoginView] 게임 서버 연결 실패 또는 타임아웃.');
-                localStorage.clear(); // 토큰 삭제 후 다시 로그인하도록 유도
-            } else {
-                // 여전히 연결 중이거나 인스턴스가 아직 없는 상태
-                logger.debug(`[LoginView] Socket.IO 연결 대기 중... isConnected: ${isSocketConnected.value}, instance: ${socket.value ? 'exists' : 'null'}, connected: ${socket.value?.connected || 'N/A'}`);
+                localStorage.clear();
             }
-        }, 300); // 0.3초마다 확인 (로그 빈도 줄임)
+        }, 300);
 
     }
 
@@ -158,14 +153,12 @@ const handleLogin = async () => {
             loginError.value = `로그인 중 오류가 발생했습니다 (${error.response.status}). 다시 시도해주세요.`;
         }
     } else if (error.message.includes("Login API response missing user data") || error.message.includes("Socket.IO setup function not available") || error.message.includes("Failed to initialize Socket.IO instance")) {
-        // 사용자 데이터 누락 또는 Socket.IO 초기화 오류
         loginError.value = error.message;
     }
     else {
         loginError.value = '네트워크 오류 또는 알 수 없는 오류가 발생했습니다. 다시 시도해주세요.'
     }
     logger.notify(loginError.value, 'error')
-    // 로그인 API 호출 실패 시 로컬 스토리지 정리
     localStorage.clear();
   }
 }

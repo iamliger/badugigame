@@ -11,29 +11,35 @@ const socketInstance = ref(null); // socket 인스턴스를 ref로 관리
 
 const socketPlugin = {
   install: (app) => {
-    // `setupSocket` 함수를 플러그인 레벨에서 정의하여 `socketInstance.value`를 관리합니다.
     const setupSocket = () => {
       const token = localStorage.getItem('jwt_token');
 
-      if (!token && router.currentRoute.path !== '/login') {
+      if (!token && router.currentRoute.value.path !== '/login') { // to.path 대신 router.currentRoute.value.path 사용
         logger.warn('[SocketPlugin] JWT 토큰 없음. Socket.IO 연결 시도 안 함. 로그인 페이지로 리다이렉트.');
         isSocketConnected.value = false;
         router.replace('/login');
         return null;
       }
 
-      // 이미 유효한 소켓이 연결되어 있다면 재사용
+      // 기존 소켓 인스턴스가 존재하고, 연결되어 있으며, 토큰도 동일하다면 재사용
       if (socketInstance.value && socketInstance.value.connected && socketInstance.value.auth.token === token) {
         logger.log('[SocketPlugin] 이미 유효한 Socket.IO가 연결되어 있습니다. 재사용.');
         isSocketConnected.value = true;
         return socketInstance.value;
       }
 
-      // 기존 소켓이 있지만 연결되지 않았거나 토큰이 다르다면 끊고 새로 생성
+      // 기존 소켓 인스턴스가 존재하지만, 연결되지 않았거나 토큰이 다르다면 끊고 새로 생성
       if (socketInstance.value && (!socketInstance.value.connected || socketInstance.value.auth.token !== token)) {
         logger.log('[SocketPlugin] 기존 소켓이 연결되지 않았거나 토큰이 다름. 강제 해제 후 새로 생성.');
         socketInstance.value.disconnect();
         socketInstance.value = null; // 인스턴스 초기화
+      }
+
+      // 토큰이 없는데 연결하려 한다면
+      if (!token) {
+        logger.warn('[SocketPlugin] 토큰이 없어 Socket.IO 인스턴스를 생성할 수 없습니다.');
+        isSocketConnected.value = false;
+        return null;
       }
 
       logger.log('[SocketPlugin] Socket.IO 인스턴스 생성 및 연결 시도...');
@@ -51,12 +57,12 @@ const socketPlugin = {
       newSocket.on('disconnect', (reason) => {
         logger.warn('[SocketPlugin] Socket.IO: 연결 해제됨 (' + reason + ')');
         isSocketConnected.value = false;
-        if (localStorage.getItem('jwt_token') && reason !== 'io client disconnect' && reason !== 'transport close') { // 'transport close'는 자동 재연결 시도 중 발생할 수 있음
+        if (localStorage.getItem('jwt_token') && reason !== 'io client disconnect' && reason !== 'transport close') {
           logger.info('[SocketPlugin] 토큰 존재, Socket.IO 재연결 시도 중...');
           setTimeout(() => newSocket.connect(), 3000);
         } else if (!localStorage.getItem('jwt_token')) {
           logger.warn('[SocketPlugin] 토큰 없음, Socket.IO 재연결 시도 안 함. 로그인 페이지로 리다이렉트.');
-          if (router.currentRoute.path !== '/login') {
+          if (router.currentRoute.value.path !== '/login') { // to.path 대신 router.currentRoute.value.path 사용
             router.replace('/login');
           }
         }
@@ -65,8 +71,6 @@ const socketPlugin = {
       newSocket.on('connect_error', (err) => {
         logger.error('[SocketPlugin] Socket.IO: 연결 오류 발생 - ' + err.message);
         isSocketConnected.value = false;
-        // connect_error 발생 시 명시적인 재연결 시도를 추가할 수 있습니다.
-        // 예를 들어, 일정 시간 후 다시 connect()를 시도하는 setTimeout
       });
 
       newSocket.on('reconnect_attempt', (attemptNumber) => {
@@ -82,7 +86,7 @@ const socketPlugin = {
         logger.error('[SocketPlugin] Socket.IO: 재연결 실패. 로그인 페이지로 리다이렉트.');
         isSocketConnected.value = false;
         localStorage.clear();
-        if (router.currentRoute.path !== '/login') {
+        if (router.currentRoute.value.path !== '/login') { // to.path 대신 router.currentRoute.value.path 사용
           router.replace('/login');
         }
       });
@@ -93,13 +97,13 @@ const socketPlugin = {
 
     app.provide('isSocketConnected', isSocketConnected);
     app.provide('socket', socketInstance);
-    // ✨ NEW: setupSocket 함수도 주입하여 LoginView에서 명시적으로 호출할 수 있도록 합니다.
     app.provide('setupSocket', setupSocket);
 
 
     router.beforeEach(async (to, from, next) => {
       const token = localStorage.getItem('jwt_token');
 
+      // ✨ FIX: router.currentRoute.value.meta.requiresAuth 사용
       if (to.meta.requiresAuth && !token) {
         logger.warn('[SocketPlugin] 인증 필요 경로 진입 시 토큰 없음. 로그인 페이지로 리다이렉트.');
         if (socketInstance.value) {
@@ -115,18 +119,25 @@ const socketPlugin = {
         if (token) {
           // 토큰이 있고, 아직 소켓 인스턴스가 없거나 연결되지 않았다면 연결 시도
           if (!socketInstance.value || !socketInstance.value.connected) {
+            logger.log('[SocketPlugin] Router beforeEach: 토큰 존재, Socket 인스턴스 없거나 연결 끊김. setupSocket 호출.');
             const socket = setupSocket(); // `setupSocket` 호출
             if (socket && !socket.connected) {
               logger.log('[SocketPlugin] Socket.IO 연결 시작 (Router beforeEach).');
               socket.connect();
+            } else if (!socket) {
+              logger.error('[SocketPlugin] Router beforeEach: setupSocket 호출 후에도 Socket.IO 인스턴스를 얻지 못했습니다. 로그인 페이지로.');
+              localStorage.clear();
+              next('/login');
+              return;
             }
           } else {
-            isSocketConnected.value = true; // 이미 연결되어 있다면 상태를 true로 유지
+            logger.log('[SocketPlugin] Router beforeEach: Socket.IO 이미 연결됨.');
+            isSocketConnected.value = true;
           }
         } else {
           // 토큰이 없는데 소켓이 연결되어 있다면 (예: 로그아웃 후) 연결 끊기
           if (socketInstance.value && socketInstance.value.connected) {
-            logger.log('[SocketPlugin] 토큰 없음, Socket.IO 연결 끊기 (Router beforeEach).');
+            logger.log('[SocketPlugin] Router beforeEach: 토큰 없음, Socket.IO 연결 끊기.');
             socketInstance.value.disconnect();
             isSocketConnected.value = false;
           }
@@ -136,5 +147,6 @@ const socketPlugin = {
     });
   }
 };
+
 
 export default socketPlugin;

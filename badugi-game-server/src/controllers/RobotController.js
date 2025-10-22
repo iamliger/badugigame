@@ -3,27 +3,26 @@
 import { io } from "socket.io-client";
 import axios from 'axios';
 import { logDebug, warnDebug, errorDebug } from '../../logger.js';
-
-// ✨ NEW: dotenv를 직접 임포트하여 이 파일에서 환경 변수를 사용하도록 합니다.
 import dotenv from 'dotenv';
-dotenv.config({ path: './.env' }); // ✨ MODIFIED: RobotController.js에서도 .env 경로 명시
+import path from 'path';
+import { fileURLToPath } from 'url'; // ESM에서 __dirname을 사용하기 위한 헬퍼
+
+// 🌟 첫 번째 해결책: dotenv.config()에 .env 파일의 정확한 절대 경로 지정 🌟
+// 현재 파일(__filename)의 경로를 기준으로, 두 단계 상위 디렉토리(../../)로 이동하여
+// badugi-game-server 프로젝트의 루트에 있는 .env 파일을 찾습니다.
+const __filename = fileURLToPath(import.meta.url); // 현재 파일의 URL
+const __dirname = path.dirname(__filename);      // 현재 파일이 있는 디렉토리 경로
+dotenv.config({ path: path.resolve(__dirname, '../../.env') }); // 루트 .env 파일을 로드
 
 // 봇이 사용할 라라벨 API URL (로그인 등)
-const LARAVEL_API_URL = process.env.LARAVEL_API_URL || 'http://localhost:8000/api/auth';
+// const LARAVEL_API_URL = process.env.LARAVEL_API_URL || 'http://localhost:8000/api/auth';
 const LARAVEL_ROBOT_LOGIN_API_URL = process.env.LARAVEL_ROBOT_LOGIN_API_URL || 'http://localhost:8000/api/robot-auth/login';
 const GAME_SERVER_URL = process.env.GAME_SERVER_URL || 'http://localhost:3000';
 
-// ✨ NEW: RobotController 로드 시점의 환경 변수 상태 확인 로그
-logDebug(`[RobotController Init] LARAVEL_ROBOT_LOGIN_API_URL: ${LARAVEL_ROBOT_LOGIN_API_URL}`);
-logDebug(`[RobotController Init] GAME_SERVER_URL for bot connections: ${GAME_SERVER_URL}`);
+logDebug('[RobotController Init]', `LARAVEL_ROBOT_LOGIN_API_URL: ${LARAVEL_ROBOT_LOGIN_API_URL}`);
 
 if (!process.env.LARAVEL_ROBOT_LOGIN_API_URL) {
-    errorDebug('[RobotController] WARN: LARAVEL_ROBOT_LOGIN_API_URL is still not defined after dotenv.config() in RobotController.');
-}
-
-// ✨ NEW: GAME_SERVER_URL이 정의되지 않았을 경우 경고/오류 추가
-if (!process.env.GAME_SERVER_URL) {
-    errorDebug('[RobotController] WARN: GAME_SERVER_URL is NOT defined in RobotController after dotenv.config().');
+    errorDebug('[RobotController Init]', '경고: LARAVEL_ROBOT_LOGIN_API_URL 환경 변수가 .env 파일에 정의되지 않았습니다. 기본값을 사용합니다.');
 }
 
 class RobotController {
@@ -44,17 +43,17 @@ class RobotController {
         const { id: userId, name: userName, email, password, points } = robotData;
 
         if (this.activeBots[userId]) {
-            warnDebug(`[RobotController] 로봇 ${userName} (ID: ${userId}) 이미 활성화되어 있습니다.`);
+            warnDebug('[RobotController]', `로봇 ${userName} (ID: ${userId}) 이미 활성화되어 있습니다.`); // ✨ FIX: 태그 추가
             return this.activeBots[userId];
         }
 
-        logDebug(`[RobotController] 로봇 ${userName} (ID: ${userId}) 로그인 시도: ${email}`);
+        logDebug('[RobotController]', `로봇 ${userName} (ID: ${userId}) 로그인 시도: ${email}`); // ✨ FIX: 태그 추가
 
         let token = '';
         try {
             // ✨ 환경 변수가 여기에 도달하는지 다시 확인
             if (!LARAVEL_ROBOT_LOGIN_API_URL) {
-                errorDebug('[RobotController] FATAL: LARAVEL_ROBOT_LOGIN_API_URL is UNDEFINED at connectBot execution.');
+                errorDebug('[RobotController]', 'FATAL: LARAVEL_ROBOT_LOGIN_API_URL is UNDEFINED at connectBot execution.'); // ✨ FIX: 태그 추가
                 throw new Error('LARAVEL_ROBOT_LOGIN_API_URL is not defined in RobotController.');
             }
 
@@ -64,9 +63,9 @@ class RobotController {
                 password: 'password'
             });
             token = loginResponse.data.access_token;
-            logDebug(`[RobotController] 로봇 ${userName} 로그인 성공. 토큰 획득. 칩: ${points}. 토큰 시작: ${token.substring(0, 20)}...`);
+            logDebug('[RobotController]', `로봇 ${userName} 로그인 성공. 토큰 획득. 칩: ${points}. 토큰 시작: ${token.substring(0, 20)}...`); // ✨ FIX: 태그 추가
         } catch (error) {
-            errorDebug(`[RobotController] 로봇 ${userName} 로그인 실패:`, error.response?.data || error.message || `No response from ${LARAVEL_ROBOT_LOGIN_API_URL}`);
+            errorDebug('[RobotController]', `로봇 ${userName} 로그인 실패:`, error.response?.data || error.message || `No response from ${LARAVEL_ROBOT_LOGIN_API_URL}`); // ✨ FIX: 태그 추가
             return null;
         }
 
@@ -79,68 +78,65 @@ class RobotController {
 
         socket.userId = userId;
         socket.userName = userName;
-        socket.userChips = points; // Laravel에서 전달받은 초기 칩 사용
+        socket.userChips = points;
         socket.currentRoomId = null;
         socket.currentHand = [];
         socket.roomState = null;
 
         // --- Socket 이벤트 핸들러 ---
         socket.on('connect', () => {
-            logDebug(`[Robot ${socket.userName}] Socket.IO 연결 성공. ID: ${socket.id}`);
+            logDebug(`[Robot ${socket.userName}]`, `Socket.IO 연결 성공. ID: ${socket.id}`); // ✨ FIX: 태그 추가
             this.activeBots[userId] = socket;
             socket.emit('getRooms');
         });
 
         socket.on('disconnect', (reason) => {
-            logDebug(`[Robot ${socket.userName}] Socket.IO 연결 해제: ${reason}`);
+            logDebug(`[Robot ${socket.userName}]`, `Socket.IO 연결 해제: ${reason}`); // ✨ FIX: 태그 추가
             delete this.activeBots[userId];
         });
 
         socket.on('connect_error', (err) => {
-            errorDebug(`[Robot ${socket.userName}] Socket.IO 연결 오류: ${err.message}`);
+            errorDebug(`[Robot ${socket.userName}]`, `Socket.IO 연결 오류: ${err.message}`); // ✨ FIX: 태그 추가
         });
 
         socket.on('roomsUpdated', (rooms) => {
-            // ... 기존 로직과 동일 ...
+            // logDebug(`[Robot ${socket.userName}]`, `방 목록 업데이트 수신 (${rooms.length}개)`); // 디버깅용 로그, 필요에 따라 활성화
             if (!socket.currentRoomId) {
                 let availableRoom = rooms.find(r => r.status === 'waiting' && r.players < r.maxPlayers && !r.isPrivate);
                 if (availableRoom) {
                     socket.emit('joinRoom', { roomId: availableRoom.id, initialChips: socket.userChips }, (response) => {
                         if (response.success) {
-                            logDebug(`[Robot ${socket.userName}] 방 ${availableRoom.name} (${availableRoom.id}) 입장 성공.`);
+                            logDebug(`[Robot ${socket.userName}]`, `방 ${availableRoom.name} (${availableRoom.id}) 입장 성공.`); // ✨ FIX: 태그 추가
                             socket.currentRoomId = availableRoom.id;
                             if (response.room.creatorId === socket.userId && response.room.players.length >= 2) {
                                 socket.emit('startGame', availableRoom.id, (startRes) => {
                                     if (startRes.success) {
-                                        logDebug(`[Robot ${socket.userName}] 게임 시작 명령 성공.`);
+                                        logDebug(`[Robot ${socket.userName}]`, `게임 시작 명령 성공.`); // ✨ FIX: 태그 추가
                                     } else {
-                                        warnDebug(`[Robot ${socket.userName}] 게임 시작 명령 실패: ${startRes.message}`);
+                                        warnDebug(`[Robot ${socket.userName}]`, `게임 시작 명령 실패: ${startRes.message}`); // ✨ FIX: 태그 추가
                                     }
                                 });
                             }
                         } else {
-                            warnDebug(`[Robot ${socket.userName}] 방 ${availableRoom.name} (${availableRoom.id}) 입장 실패: ${response.message}`);
+                            warnDebug(`[Robot ${socket.userName}]`, `방 ${availableRoom.name} (${availableRoom.id}) 입장 실패: ${response.message}`); // ✨ FIX: 태그 추가
                         }
                     });
                 } else {
-                    // 방이 없으면 방 만들기 시도 (가장 낮은 ID 봇만 방 만들도록)
-                    // 이 로직은 Filament에서 시작된 봇들이 동시에 실행될 때,
-                    // 가장 낮은 ID를 가진 봇만 방을 만들도록 하는 것이 좋습니다.
                     const activeBotIds = Object.keys(this.activeBots).map(Number);
                     if (activeBotIds.length > 0 && userId === Math.min(...activeBotIds)) {
                         socket.emit('createRoom', { name: `${socket.userName}의 방`, betAmount: 100 }, (response) => {
                             if (response.success) {
-                                logDebug(`[Robot ${socket.userName}] 방 생성 성공: ${response.room.name} (${response.room.id})`);
+                                logDebug(`[Robot ${socket.userName}]`, `방 생성 성공: ${response.room.name} (${response.room.id})`); // ✨ FIX: 태그 추가
                                 socket.emit('joinRoom', { roomId: response.room.id, initialChips: socket.userChips }, (joinResponse) => {
                                     if (joinResponse.success) {
-                                        logDebug(`[Robot ${socket.userName}] 생성한 방 ${response.room.name} 입장 성공.`);
+                                        logDebug(`[Robot ${socket.userName}]`, `생성한 방 ${response.room.name} 입장 성공.`); // ✨ FIX: 태그 추가
                                         socket.currentRoomId = response.room.id;
                                     } else {
-                                        warnDebug(`[Robot ${socket.userName}] 생성한 방 입장 실패: ${joinResponse.message}`);
+                                        warnDebug(`[Robot ${socket.userName}]`, `생성한 방 입장 실패: ${joinResponse.message}`); // ✨ FIX: 태그 추가
                                     }
                                 });
                             } else {
-                                errorDebug(`[Robot ${socket.userName}] 방 생성 실패: ${response.message}`);
+                                errorDebug(`[Robot ${socket.userName}]`, `방 생성 실패: ${response.message}`); // ✨ FIX: 태그 추가
                             }
                         });
                     }
@@ -154,9 +150,9 @@ class RobotController {
                 if (roomState.creatorId === socket.userId && roomState.status === 'waiting' && roomState.players.length >= 2) {
                     socket.emit('startGame', roomState.id, (startRes) => {
                         if (startRes.success) {
-                            logDebug(`[Robot ${socket.userName}] (방장) 게임 시작 명령 성공.`);
+                            logDebug(`[Robot ${socket.userName}]`, `(방장) 게임 시작 명령 성공.`); // ✨ FIX: 태그 추가
                         } else {
-                            warnDebug(`[Robot ${socket.userName}] (방장) 게임 시작 명령 실패: ${startRes.message}`);
+                            warnDebug(`[Robot ${socket.userName}]`, `(방장) 게임 시작 명령 실패: ${startRes.message}`); // ✨ FIX: 태그 추가
                         }
                     });
                 }
@@ -166,7 +162,7 @@ class RobotController {
         socket.on('gameStarted', (data) => {
             socket.currentHand = data.myHand;
             socket.roomState = data.room;
-            logDebug(`[Robot ${socket.userName}] 게임 시작! 내 패: ${socket.currentHand.map(c => `${c.suit}${c.rank}`).join(', ')}`);
+            logDebug(`[Robot ${socket.userName}]`, `게임 시작! 내 패: ${socket.currentHand.map(c => `${c.suit}${c.rank}`).join(', ')}`); // ✨ FIX: 태그 추가
         });
 
         socket.on('myHandUpdated', (data) => {
@@ -175,7 +171,7 @@ class RobotController {
 
         socket.on('turnChanged', (data) => {
             if (data.currentPlayerId === socket.userId && socket.roomState?.status === 'playing') {
-                logDebug(`[Robot ${socket.userName}] 내 턴! 남은 시간: ${data.timeLeft}초. 현재 페이즈: ${socket.roomState.currentPhase}`);
+                logDebug(`[Robot ${socket.userName}]`, `내 턴! 남은 시간: ${data.timeLeft}초. 현재 페이즈: ${socket.roomState.currentPhase}`); // ✨ FIX: 태그 추가
                 setTimeout(() => {
                     this.takeBotAction(socket);
                 }, Math.random() * 2000 + 1000);
@@ -183,7 +179,7 @@ class RobotController {
         });
 
         socket.on('gameEnded', (data) => {
-            logDebug(`[Robot ${socket.userName}] 게임 종료! 승자: ${data.winnerNames.join(', ')}. 이유: ${data.reason}`);
+            logDebug(`[Robot ${socket.userName}]`, `게임 종료! 승자: ${data.winnerNames.join(', ')}. 이유: ${data.reason}`); // ✨ FIX: 태그 추가
             socket.currentRoomId = null;
             socket.currentHand = [];
             socket.roomState = null;
@@ -195,7 +191,6 @@ class RobotController {
         return socket;
     }
 
-    // ... (takeBotAction, startRobots, stopRobots 메서드는 변경 없음) ...
     /**
      * 봇의 게임 액션을 처리합니다.
      * @param {Socket} socket - 봇의 소켓 인스턴스
@@ -207,21 +202,22 @@ class RobotController {
         const myPlayer = room.players.find(p => p.id === socket.userId);
         if (!myPlayer || myPlayer.folded || myPlayer.leaveReserved) {
             socket.emit('playerAction', { roomId: room.id, action: 'die', amount: 0 }, (res) => {
-                if (res.success) logDebug(`[Robot ${socket.userName}] 자동 다이! (칩 부족 또는 폴드/퇴장 예약)`);
-                else warnDebug(`[Robot ${socket.userName}] 자동 다이 실패: ${res.message}`);
+                if (res.success) logDebug(`[Robot ${socket.userName}]`, `자동 다이! (칩 부족 또는 폴드/퇴장 예약)`); // ✨ FIX: 태그 추가
+                else warnDebug(`[Robot ${socket.userName}]`, `자동 다이 실패: ${res.message}`); // ✨ FIX: 태그 추가
             });
             return;
         }
         if (myPlayer.chips <= 0 && room.currentPhase === 'betting' && room.currentBet > 0) {
             socket.emit('playerAction', { roomId: room.id, action: 'die', amount: 0 }, (res) => {
-                if (res.success) logDebug(`[Robot ${socket.userName}] 칩 부족으로 자동 다이!`);
-                else warnDebug(`[Robot ${socket.userName}] 칩 부족 자동 다이 실패: ${res.message}`);
+                if (res.success) logDebug(`[Robot ${socket.userName}]`, `칩 부족으로 자동 다이!`); // ✨ FIX: 태그 추가
+                else warnDebug(`[Robot ${socket.userName}]`, `칩 부족 자동 다이 실패: ${res.message}`); // ✨ FIX: 태그 추가
             });
             return;
         }
 
 
         const actions = [];
+        // ... (takeBotAction 로직은 기존과 동일) ...
         // 베팅 페이즈
         if (room.currentPhase === 'betting') {
             const myCurrentRoundBet = myPlayer.currentRoundBet;
@@ -306,7 +302,7 @@ class RobotController {
             chosenAction = { action: (room.currentPhase === 'betting' ? 'die' : 'stay'), amount: 0, cardsToExchange: [] };
         }
 
-        logDebug(`[Robot ${socket.userName}] 액션 선택: ${chosenAction.action} (금액: ${chosenAction.amount || 'N/A'}, 교환: ${chosenAction.cardsToExchange?.length || 0}장)`);
+        logDebug(`[Robot ${socket.userName}]`, `액션 선택: ${chosenAction.action} (금액: ${chosenAction.amount || 'N/A'}, 교환: ${chosenAction.cardsToExchange?.length || 0}장)`); // ✨ FIX: 태그 추가
 
         socket.emit('playerAction', {
             roomId: room.id,
@@ -315,8 +311,9 @@ class RobotController {
             cardsToExchange: chosenAction.cardsToExchange
         }, (response) => {
             if (response.success) {
+                // console.log(`[Bot ${socket.userName}] 액션 ${chosenAction.action} 성공.`); // 디버깅용 로그, 파일 로깅으로 대체
             } else {
-                warnDebug(`[Robot ${socket.userName}] 액션 ${chosenAction.action} 실패: ${response.message}`);
+                warnDebug(`[Robot ${socket.userName}]`, `액션 ${chosenAction.action} 실패: ${response.message}`); // ✨ FIX: 태그 추가
             }
         });
     }
@@ -336,17 +333,15 @@ class RobotController {
         const startedRobotIds = [];
         for (const robotData of robots) {
             try {
-                // `robotData.password`는 Filament에서 해싱되지 않은 'password' 문자열로 넘어와야 합니다.
-                // Laravel RobotManager에서 'password'로 해싱했으므로, 여기서도 'password'로 사용합니다.
-                const botSocket = await this.connectBot({ ...robotData, password: 'password' }); // ✨ FIX: 해싱되지 않은 'password'를 전달
+                const botSocket = await this.connectBot({ ...robotData, password: 'password' });
                 if (botSocket) {
                     startedRobotIds.push(robotData.id);
                 }
             } catch (error) {
-                errorDebug(`[RobotController] 로봇 ${robotData.name} 연결 실패: ${error.message}`);
+                errorDebug('[RobotController]', `로봇 ${robotData.name} 연결 실패: ${error.message}`); // ✨ FIX: 태그 추가
             }
         }
-        logDebug(`[RobotController] ${startedRobotIds.length}개의 로봇 시작 명령 처리 완료.`);
+        logDebug('[RobotController]', `${startedRobotIds.length}개의 로봇 시작 명령 처리 완료.`); // ✨ FIX: 태그 추가
         return res.json({ message: `${startedRobotIds.length}개의 로봇을 시작했습니다.`, startedRobotIds });
     }
 
@@ -374,7 +369,7 @@ class RobotController {
                 }
             }
         }
-        logDebug(`[RobotController] ${stoppedRobotIds.length}개의 로봇 정지 명령 처리 완료.`);
+        logDebug('[RobotController]', `${stoppedRobotIds.length}개의 로봇 정지 명령 처리 완료.`); // ✨ FIX: 태그 추가
         return res.json({ message: `${stoppedRobotIds.length}개의 로봇을 정지했습니다.`, stoppedRobotIds });
     }
 }
